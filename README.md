@@ -1,1 +1,1 @@
-# StudEat---Recommender-System-project
+# StudEat-Recommender-System-project
