@@ -5,6 +5,8 @@ Run from the project root:
 Interactive docs: http://localhost:8000/docs
 """
 
+import random
+
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, model_validator
 
@@ -36,6 +38,42 @@ class Profile(BaseModel):
         return self
 
 
+def hard_filters(allergies: list[str], diet: str) -> list[dict]:
+    """Remove meals the student cannot eat (rules, no ML)."""
+    return [
+        m for m in MEALS
+        if diet in m["diets"] and not set(m["allergens"]) & set(allergies)
+    ]
+
+
+def predict(user_id: int, budget_min: float, budget_max: float,
+            allergies: list[str], diet: str, k: int = 10) -> list[dict]:
+    """Placeholder for the real model.
+
+    Agreed interface with MLE-Core / MLE-Ops: returns k meals with a score.
+    Week 2: random scores. Week 3: NLGCL scores + risk control.
+    """
+    candidates = hard_filters(allergies, diet)
+    random.shuffle(candidates)
+    return [{**m, "score": round(random.random(), 3)} for m in candidates[:k]]
+
+
+def compose_box(ranked: list[dict], budget_max: float, k: int) -> list[dict]:
+    """Pick up to k meals (repeats allowed) without exceeding budget_max."""
+    box, total = [], 0.0
+    pool = sorted(ranked, key=lambda m: m["score"], reverse=True)
+    i = 0
+    while len(box) < k and pool:
+        meal = pool[i % len(pool)]
+        if total + meal["price"] <= budget_max:
+            box.append(meal)
+            total += meal["price"]
+            i += 1
+        else:
+            pool.remove(meal)
+    return box
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "meals_in_catalogue": len(MEALS)}
@@ -59,3 +97,35 @@ def get_profile(user_id: int):
     if user_id not in PROFILES:
         raise HTTPException(status_code=404, detail="Unknown user")
     return PROFILES[user_id]
+
+
+@app.get("/recommend/{user_id}")
+def recommend(user_id: int):
+    if user_id not in PROFILES:
+        raise HTTPException(status_code=404, detail="Unknown user")
+    p = PROFILES[user_id]
+    k = p["meals_per_week"]
+
+    candidates = hard_filters(p["allergies"], p["diet"])
+    if not candidates:
+        raise HTTPException(status_code=422, detail="No meal matches these allergies and diet")
+
+    # Minimum feasible budget: k times the cheapest compatible meal.
+    min_feasible = round(k * min(m["price"] for m in candidates), 2)
+    if p["budget_max"] < min_feasible:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Budget too low: a box of {k} meals starts at {min_feasible} EUR with these constraints",
+        )
+
+    ranked = predict(user_id, p["budget_min"], p["budget_max"], p["allergies"], p["diet"], k=len(candidates))
+    box = compose_box(ranked, p["budget_max"], k)
+    total = round(sum(m["price"] for m in box), 2)
+    return {
+        "user_id": user_id,
+        "meals": box,
+        "total_price": total,
+        "within_budget": p["budget_min"] <= total <= p["budget_max"],
+        "min_feasible_budget": min_feasible,
+        "model": "mock (random scores)",
+    }
