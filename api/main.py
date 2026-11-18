@@ -1,11 +1,11 @@
-"""StudEat API (week 2 version: mock recommendations).
-
+"""StudEat API
 Run from the project root:
     python -m uvicorn api.main:app --reload
 Interactive docs: http://localhost:8000/docs
 """
 
 import random
+from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, model_validator
@@ -16,6 +16,9 @@ app = FastAPI(title="StudEat API", version="0.2-mock")
 
 # In-memory storage until the SQLite database is ready (week 3).
 PROFILES: dict[int, dict] = {}
+# Ratings given by students (moved to the SQLite database by the DE in week 3).
+INTERACTIONS: list[dict] = []
+MEAL_IDS = {m["id"] for m in MEALS}
 
 
 class Profile(BaseModel):
@@ -129,3 +132,25 @@ def recommend(user_id: int):
         "min_feasible_budget": min_feasible,
         "model": "mock (random scores)",
     }
+
+
+class Interaction(BaseModel):
+    user_id: int
+    meal_id: int
+    rating: int = Field(..., ge=1, le=5, description="1 to 5 stars")
+
+
+@app.post("/log_interaction")
+def log_interaction(interaction: Interaction):
+    if interaction.user_id not in PROFILES:
+        raise HTTPException(status_code=404, detail="Unknown user")
+    if interaction.meal_id not in MEAL_IDS:
+        raise HTTPException(status_code=404, detail="Unknown meal")
+    record = {**interaction.model_dump(), "timestamp": datetime.now(timezone.utc).isoformat()}
+    INTERACTIONS.append(record)
+    return {"message": "rating saved", "interaction": record}
+
+
+@app.get("/interactions/{user_id}")
+def get_interactions(user_id: int):
+    return [i for i in INTERACTIONS if i["user_id"] == user_id]
