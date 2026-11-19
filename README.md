@@ -2,9 +2,6 @@
 
 Personalized weekly ready-meal box for students within a chosen budget range.
 
-> **Status (week 2):** the API returns **mock recommendations** (random scores on a small hand-made catalogue).
-> The real NLGCL model and the Food.com catalogue will be plugged in during week 3 through the `predict()` function.
-
 ## Team
 
 | Role | Member |
@@ -19,12 +16,51 @@ Personalized weekly ready-meal box for students within a chosen budget range.
 
 ```
 api/
-  main.py        FastAPI backend (endpoints + placeholder predict())
-  mock_data.py   Mock meal catalogue (replaced by Food.com in week 3)
+  main.py           FastAPI backend (endpoints + placeholder predict())
+  mock_data.py      Mock meal catalogue (replaced by Food.com in week 3)
 app/
-  app.py         Streamlit interface (sign-up + weekly box)
+  app.py            Streamlit interface (sign-up + weekly box)
+data
+  processed
+  raw
+studeat.db
+src
+  data_pipeline.py 
 requirements.txt
 ```
+
+## Datasets
+
+The raw data files are **not versioned** (too large for git). Download them manually and place them in `data/raw/` before running the pipeline.
+
+### 1 — Food.com Recipes and Interactions (Kaggle)
+
+Required files: `RAW_recipes.csv` and `RAW_interactions.csv`
+
+1. Go to [https://www.kaggle.com/datasets/shuyangli94/food-com-recipes-and-user-interactions](https://www.kaggle.com/datasets/shuyangli94/food-com-recipes-and-user-interactions)
+2. Click **Download** (the main button — not "selected columns")
+3. Extract the zip and copy the two CSV files into `data/raw/`
+
+### 2 — Open Food Facts Prices (data.gouv.fr)
+
+Required file: `prices.parquet`
+
+```bash
+curl -L "https://www.data.gouv.fr/api/1/datasets/r/49716ed5-aacf-4692-8b2d-3cc6d15bf1d1" -o data/raw/prices.parquet
+```
+
+Or download manually from the URL above and save as `data/raw/prices.parquet`.
+
+### 3 — Run the pipeline
+
+```bash
+pip install pandas numpy pyarrow
+python src/data_pipeline.py
+```
+
+Output: `data/studeat.db` (SQLite) and CSVs in `data/processed/`.
+
+---
 
 ## Run locally
 
