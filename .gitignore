@@ -9,12 +9,18 @@ data/*.db
 
 # ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
+*.pyc
 *.py[cod]
 *.pyo
 .env
 venv/
 .venv/
 *.egg-info/
+
+data/
+*.csv
+*.parquet
+*.pt
 
 # ── Notebooks checkpoints ─────────────────────────────────────────────────────
 .ipynb_checkpoints/
