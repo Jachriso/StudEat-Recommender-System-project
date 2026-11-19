@@ -28,7 +28,7 @@ def parse_list(s):
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 1. Load & filter recipes by tags
+# 1. Load and filter recipes by tags
 # ═════════════════════════════════════════════════════════════════════════════
 print("=" * 60)
 print("STEP 1 — Load & filter recipes")
@@ -71,7 +71,7 @@ print(f"  Nutrition columns added: {NUTR_COLS}")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 3. Load & clean interactions
+# 3. Load and clean interactions
 # ═════════════════════════════════════════════════════════════════════════════
 print("\nSTEP 3 — Load & clean interactions")
 
