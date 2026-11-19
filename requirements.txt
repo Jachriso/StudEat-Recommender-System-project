@@ -3,4 +3,5 @@ uvicorn[standard]
 pydantic
 streamlit
 requests
-pandas
+pandas>=2.0
+numpy>=1.24
