@@ -9,7 +9,7 @@ Personalized weekly ready-meal box for students within a chosen budget range.
 
 | Role | Member |
 |---|---|
-| Project Lead | Jade PARILLA |
+| Project Lead | Jade PARRILLA |
 | Data Engineer | Suzy Cassandra EBOBISSE |
 | Lead ML Engineer | Hajar BENLEMQADEM |
 | ML Engineer | Annabelle FAUTRAD |
