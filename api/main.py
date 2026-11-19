@@ -5,20 +5,29 @@ Interactive docs: http://localhost:8000/docs
 """
 
 import random
+import sqlite3
 from datetime import datetime, timezone
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, model_validator
 
 from api.mock_data import ALLERGENS, DIETS, MEALS
 
-app = FastAPI(title="StudEat API", version="0.2-mock")
+app = FastAPI(title="StudEat API", version="0.3-sqlite")
 
-# In-memory storage until the SQLite database is ready (week 3).
+DB_PATH = Path(__file__).resolve().parent.parent / "data" / "studeat.db"
+
+# In-memory storage for profiles (no persistence needed across sessions).
 PROFILES: dict[int, dict] = {}
-# Ratings given by students (moved to the SQLite database by the DE in week 3).
-INTERACTIONS: list[dict] = []
 MEAL_IDS = {m["id"] for m in MEALS}
+
+
+def _get_conn() -> sqlite3.Connection:
+    """Return a SQLite connection with row_factory so rows behave like dicts."""
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 
 class Profile(BaseModel):
@@ -146,11 +155,22 @@ def log_interaction(interaction: Interaction):
         raise HTTPException(status_code=404, detail="Unknown user")
     if interaction.meal_id not in MEAL_IDS:
         raise HTTPException(status_code=404, detail="Unknown meal")
-    record = {**interaction.model_dump(), "timestamp": datetime.now(timezone.utc).isoformat()}
-    INTERACTIONS.append(record)
+    timestamp = datetime.now(timezone.utc).isoformat()
+    # meal_id is stored as recipe_id to match the interactions table schema
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT INTO interactions (user_id, recipe_id, rating, date) VALUES (?, ?, ?, ?)",
+            (interaction.user_id, interaction.meal_id, interaction.rating, timestamp),
+        )
+    record = {**interaction.model_dump(), "timestamp": timestamp}
     return {"message": "rating saved", "interaction": record}
 
 
 @app.get("/interactions/{user_id}")
 def get_interactions(user_id: int):
-    return [i for i in INTERACTIONS if i["user_id"] == user_id]
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT recipe_id AS meal_id, rating, date AS timestamp FROM interactions WHERE user_id = ?",
+            (user_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
