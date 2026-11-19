@@ -1,5 +1,6 @@
 """
 StudEat — Data Engineering Pipeline
+
 """
 
 import ast
@@ -10,7 +11,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-# Paths 
+from pipeline_config import UNIT_TO_G, CATEGORY_TAG_MAP, STATIC_FALLBACK
+
+# ── Paths ─────────────────────────────────────────────────────────────────────
 ROOT      = Path(__file__).resolve().parent.parent
 RAW       = ROOT / "data" / "raw"
 PROCESSED = ROOT / "data" / "processed"
@@ -18,7 +21,7 @@ DB_PATH   = ROOT / "data" / "studeat.db"
 
 PROCESSED.mkdir(parents=True, exist_ok=True)
 
-# Helpers 
+# ── Helpers ───────────────────────────────────────────────────────────────────
 def parse_list(s):
     try:
         return ast.literal_eval(s)
@@ -103,7 +106,9 @@ recipes = recipes.merge(rating_stats, on="id", how="left")
 recipes["avg_rating"] = recipes["avg_rating"].fillna(0)
 recipes["n_ratings"]  = recipes["n_ratings"].fillna(0).astype(int)
 
-M = 5  # Bayesian prior (minimum rating count)
+# Bayesian average: penalises recipes with very few ratings
+# score = (n × avg) / (n + M) where M is the minimum rating threshold
+M = 5
 recipes["_score"] = (
     recipes["n_ratings"] * recipes["avg_rating"]
 ) / (recipes["n_ratings"] + M)
@@ -119,18 +124,25 @@ print(f"  Interactions after dedup: {len(inter):,}")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 5. K-core filtering (min 5 interactions per user AND per recipe)
+# 5. K-core filtering
+#    Separate thresholds: recipes need more signal than users.
+#    MIN_K_RECIPE = 5: a recipe rated fewer than 5 times has weak collaborative
+#                      signal and would produce a noisy embedding.
+#    MIN_K_USER   = 3: even 3 ratings give the GNN enough to learn from,
+#                      and a higher threshold would discard too many users.
 # ═════════════════════════════════════════════════════════════════════════════
-print("\nSTEP 5 — K-core filtering (min 5)")
+print("\nSTEP 5 — K-core filtering (min 5 per recipe, min 3 per user)")
 
-MIN_K = 5
+MIN_K_RECIPE = 5
+MIN_K_USER   = 3
+
 prev_size = -1
 iteration = 0
 
 while True:
     iteration += 1
-    valid_recipes = set(inter["recipe_id"].value_counts()[lambda x: x >= MIN_K].index)
-    valid_users   = set(inter["user_id"].value_counts()[lambda x: x >= MIN_K].index)
+    valid_recipes = set(inter["recipe_id"].value_counts()[lambda x: x >= MIN_K_RECIPE].index)
+    valid_users   = set(inter["user_id"].value_counts()[lambda x: x >= MIN_K_USER].index)
     inter = inter[
         inter["recipe_id"].isin(valid_recipes) &
         inter["user_id"].isin(valid_users)
@@ -171,51 +183,29 @@ print(f"  Test period  : {test['date'].min().date()} → {test['date'].max().dat
 
 # ═════════════════════════════════════════════════════════════════════════════
 # 7. Price estimation
-#    Source : Carrefour France 2024 shelf prices (fresh produce + dry goods)
-#    Unit   : €/100g for all entries in PRICE_TABLE
+#    Source (primary)  : Open Food Facts Prices parquet — real prices from
+#                        French supermarkets (Carrefour, Intermarché, etc.)
+#                        Filtered: country=FR, currency=EUR, price > 0.
+#                        Price per 100g computed from price_per=KILOGRAM rows
+#                        or from (price / product_quantity_g * 100).
+#                        Median per ingredient category to remove outliers.
+#    Source (fallback) : static €/100g table for ingredients not covered.
 #    Method :
-#      1. Parse each ingredient string to extract quantity + unit → grams
-#         (e.g. "2 cups flour" → 2 × 240g = 480g)
-#      2. Keyword-match the ingredient name against PRICE_TABLE to get €/100g
-#         Specific entries (e.g. "cream of chicken soup") are listed BEFORE
-#         their generic parent ("chicken") so the first match wins and
-#         avoids misclassification.
-#      3. price_ingredient = (€/100g) × (grams / 100)
-#      4. Sum over all ingredients → estimated meal price in €
+#      1. build_price_table_from_parquet() loads the parquet and returns a
+#         dict {ingredient_keyword: median_price_per_100g}.
+#      2. parse_weight_g() extracts grams from the ingredient text.
+#      3. Keyword match (specific before generic) → price in €/100g.
+#      4. ingredient cost = (€/100g) × (grams / 100); sum → meal price.
 # ═════════════════════════════════════════════════════════════════════════════
-print("\nSTEP 7 — Price estimation (Carrefour France reference)")
+print("\nSTEP 7 — Price estimation (Open Food Facts Prices + static fallback)")
 
-# ── Unit → grams conversion table ────────────────────────────────────────────
-# Covers the most common units found in Food.com ingredient strings.
-# Liquid volumes are approximated as water-equivalent (1 ml ≈ 1 g) for
-# simplicity; this is acceptable for broths, milk, oils at this precision level.
-UNIT_TO_G = {
-    "kg": 1000, "g": 1,
-    "lb": 453,  "lbs": 453, "pound": 453, "pounds": 453,
-    "oz": 28,   "ounce": 28, "ounces": 28,
-    "cup": 240, "cups": 240,
-    "tbsp": 15, "tablespoon": 15, "tablespoons": 15,
-    "tsp": 5,   "teaspoon": 5,   "teaspoons": 5,
-    "l": 1000,  "liter": 1000,   "liters": 1000,
-    "ml": 1,    "milliliter": 1, "milliliters": 1,
-    "can": 400, "cans": 400,     # standard 400g can
-    "clove": 5, "cloves": 5,     # one garlic clove ≈ 5g
-    "slice": 30,"slices": 30,
-    "piece": 100,"pieces": 100,
-    "bunch": 150,"bunches": 150,
-    "stalk": 40, "stalks": 40,
-    "sprig": 5,  "sprigs": 5,
-}
-
-# Regex: captures an optional quantity (integer, decimal, or fraction like 1/2)
-# followed by an optional unit from UNIT_TO_G.
-_UNITS_PATTERN = '|'.join(sorted(UNIT_TO_G.keys(), key=len, reverse=True))
+_UNITS_PATTERN = "|".join(sorted(UNIT_TO_G.keys(), key=len, reverse=True))
 _QTY_RE = re.compile(
-    r'(\d+(?:\.\d+)?(?:\s*/\s*\d+)?)\s*(' + _UNITS_PATTERN + r')\b',
-    re.IGNORECASE
+    r"(\d+(?:\.\d+)?(?:\s*/\s*\d+)?)\s*(" + _UNITS_PATTERN + r")\b",
+    re.IGNORECASE,
 )
 
-DEFAULT_WEIGHT_G = 150.0  # fallback when no recognisable unit is found
+DEFAULT_WEIGHT_G = 150.0
 
 def parse_weight_g(ingredient_str: str) -> float:
     """Return the weight in grams implied by the quantity + unit in the string."""
@@ -232,111 +222,82 @@ def parse_weight_g(ingredient_str: str) -> float:
     return qty * UNIT_TO_G[unit]
 
 
-# ── Price table: €/100g, Carrefour France 2024 ───────────────────────────────
-# IMPORTANT: more specific entries must come BEFORE their generic parent so
-# that the first-match rule assigns the correct price.
-# e.g. "cream of chicken soup" must appear before "chicken", otherwise
-#      "chicken" matches first and inflates the price.
-PRICE_TABLE = {
-    # -- Specific compound/processed products (listed first) -----------------
-    "cream of chicken soup":  0.18,   # canned condensed soup ~€1.80/kg
-    "cream of mushroom soup": 0.18,
-    "chicken broth":          0.14,   # ~€1.40/kg
-    "chicken stock":          0.14,
-    "beef broth":             0.14,
-    "beef stock":             0.14,
-    "vegetable broth":        0.12,
-    "vegetable stock":        0.12,
-    "tomato sauce":           0.22,   # ~€2.20/kg
-    "tomato paste":           0.28,
-    "canned tomato":          0.14,
-    "diced tomato":           0.14,
-    "crushed tomato":         0.14,
-    "coconut milk":           0.55,
-    "soy sauce":              0.38,
-    "olive oil":              0.90,   # virgin olive oil ~€9.00/L
-    "vegetable oil":          0.18,
-    "ground beef":            1.20,   # 5% MG ~€12.00/kg
-    "ground pork":            0.85,
-    "ground turkey":          1.00,
-    "ground chicken":         0.85,
-    "sweet potato":           0.18,
-    "green bean":             0.30,
-    "sour cream":             0.65,
-    "heavy cream":            0.80,
-    "whipping cream":         0.80,
-    "worcestershire":         0.50,
-    "hot sauce":              0.45,
-    # -- Generic proteins (after compound entries) ----------------------------
-    "chicken":                0.79,   # chicken fillet ~€7.90/kg
-    "beef":                   1.49,   # minced beef ~€14.90/kg
-    "pork":                   0.89,   # pork fillet ~€8.90/kg
-    "bacon":                  1.10,   # smoked lardons ~€11.00/kg
-    "ham":                    1.30,   # cooked ham ~€13.00/kg
-    "sausage":                0.75,
-    "salmon":                 2.20,   # atlantic salmon ~€22.00/kg
-    "tuna":                   1.00,   # canned tuna ~€10.00/kg
-    "shrimp":                 2.50,   # peeled shrimp ~€25.00/kg
-    "eggs":                   0.22,   # one egg ≈ 60g at ~€1.30/6 eggs
-    "tofu":                   0.55,
-    "lamb":                   1.80,   # leg of lamb ~€18.00/kg
-    "turkey":                 1.00,
-    # -- Starches & carbohydrates --------------------------------------------
-    "pasta":                  0.13,   # dry pasta ~€1.30/kg
-    "rice":                   0.11,   # long-grain rice ~€1.10/kg
-    "potato":                 0.09,   # potatoes ~€0.90/kg
-    "bread":                  0.19,
-    "flour":                  0.08,   # T45 flour ~€0.80/kg
-    "oats":                   0.09,
-    "noodles":                0.14,
-    "lentil":                 0.19,   # green lentils ~€1.90/kg
-    "bean":                   0.13,   # dried beans ~€1.30/kg
-    "chickpea":               0.15,
-    "couscous":               0.12,
-    "quinoa":                 0.55,
-    # -- Dairy ---------------------------------------------------------------
-    "mozzarella":             1.50,
-    "parmesan":               2.80,
-    "cheese":                 1.40,   # grated emmental ~€14.00/kg
-    "butter":                 1.10,   # unsalted butter ~€11.00/kg
-    "milk":                   0.09,   # semi-skimmed ~€0.90/L
-    "cream":                  0.70,   # crème fraîche ~€7.00/kg
-    "yogurt":                 0.35,
-    # -- Fresh vegetables ----------------------------------------------------
-    "onion":                  0.07,   # yellow onions ~€0.70/kg
-    "garlic":                 0.28,   # garlic ~€2.80/kg
-    "tomato":                 0.18,   # round tomatoes ~€1.80/kg
-    "carrot":                 0.09,
-    "spinach":                0.55,
-    "broccoli":               0.35,
-    "mushroom":               0.90,   # button mushrooms ~€9.00/kg
-    "pepper":                 0.28,   # bell pepper ~€2.80/kg
-    "zucchini":               0.22,
-    "eggplant":               0.28,
-    "corn":                   0.18,
-    "peas":                   0.22,
-    "celery":                 0.14,
-    "cabbage":                0.11,
-    "leek":                   0.20,
-    "cucumber":               0.15,
-    "lettuce":                0.18,
-    "asparagus":              0.80,
-    # -- Pantry / condiments -------------------------------------------------
-    "oil":                    0.20,   # generic oil fallback
-    "sugar":                  0.07,
-    "salt":                   0.02,
-    "broth":                  0.14,
-    "stock":                  0.14,
-    "lemon":                  0.18,
-    "lime":                   0.22,
-    "vinegar":                0.12,
-    "honey":                  0.75,
-    "mustard":                0.30,
-    "mayonnaise":             0.38,   # €1.49/395g ≈ €0.38/100g (Carrefour)
-    "ketchup":                0.25,
-}
+def build_price_table_from_parquet(parquet_path: Path) -> dict:
+    """
+    Build a {ingredient_keyword: median_price_per_100g} dict from the
+    Open Food Facts Prices parquet file.
 
-DEFAULT_PRICE = 0.28  # €/100g — fallback for unrecognised ingredients
+    Filtering:
+      - France only (location_osm_address_country_code == 'FR')
+      - EUR currency
+      - price > 0 and category_tag not null
+
+    Price per 100g computation:
+      - If price_per == 'KILOGRAM': price_per_100g = price / 10
+      - Else: price_per_100g = price / (product_product_quantity / 100)
+        (requires a known product quantity in grams)
+
+    Returns a dict ready to merge with the static fallback table.
+    """
+    if not parquet_path.exists():
+        print(f"  Parquet not found at {parquet_path}, using static table only.")
+        return {}
+
+    print(f"  Loading {parquet_path.name} …")
+    cols = ["category_tag", "price", "price_per", "currency",
+            "price_is_discounted", "price_without_discount",
+            "product_product_quantity", "product_product_quantity_unit",
+            "location_osm_address_country_code"]
+    df = pd.read_parquet(parquet_path, columns=cols)
+
+    # Keep France, EUR, non-null category, positive price
+    df = df[
+        (df["location_osm_address_country_code"] == "FR") &
+        (df["currency"] == "EUR") &
+        (df["category_tag"].notna()) &
+        (df["category_tag"].isin(CATEGORY_TAG_MAP))
+    ].copy()
+
+    # Use undiscounted price when available
+    df["_price"] = df.apply(
+        lambda r: float(r["price_without_discount"])
+        if r["price_is_discounted"] and r["price_without_discount"] is not None
+        else float(r["price"]),
+        axis=1,
+    )
+    df = df[df["_price"] > 0]
+
+    # Compute price per 100g
+    def price_per_100g(row):
+        if row["price_per"] == "KILOGRAM":
+            return row["_price"] / 10.0
+        qty = row["product_product_quantity"]
+        unit = row["product_product_quantity_unit"]
+        if pd.notna(qty) and qty > 0 and unit == "g":
+            return row["_price"] / (qty / 100.0)
+        return None
+
+    df["_p100g"] = df.apply(price_per_100g, axis=1)
+    df = df[df["_p100g"].notna() & (df["_p100g"] > 0) & (df["_p100g"] < 50)]
+
+    # Map category tag → ingredient keyword and take median
+    df["_keyword"] = df["category_tag"].map(CATEGORY_TAG_MAP)
+    medians = df.groupby("_keyword")["_p100g"].median().round(3)
+
+    result = medians.to_dict()
+    print(f"  Prices loaded from parquet: {len(result)} ingredients covered")
+    for kw, val in sorted(result.items()):
+        print(f"    {kw:<25} €{val:.3f}/100g")
+    return result
+
+
+# Parquet-derived prices override the static fallback for the same keyword.
+# Compound/specific entries keep their static values (not in parquet).
+PRICES_PARQUET = RAW / "prices.parquet"
+_parquet_prices = build_price_table_from_parquet(PRICES_PARQUET)
+PRICE_TABLE = {**STATIC_FALLBACK, **_parquet_prices}
+
+DEFAULT_PRICE = 0.28  # €/100g fallback for unrecognised ingredients
 
 
 def estimate_price(ingredients_str: str) -> float:
@@ -344,29 +305,22 @@ def estimate_price(ingredients_str: str) -> float:
     Estimate the total cost of a recipe in euros.
 
     For each ingredient string:
-      1. parse_weight_g() extracts the actual quantity in grams from the text
-         (e.g. '2 cups flour' → 480g).  Falls back to DEFAULT_WEIGHT_G.
-      2. keyword match against PRICE_TABLE returns the price in €/100g.
-         Specific entries appear before generic ones in the dict, so the
-         first match wins (Python 3.7+ dicts preserve insertion order).
+      1. parse_weight_g() extracts the actual quantity in grams from the text.
+      2. Keyword match against PRICE_TABLE returns the price in €/100g.
+         Specific entries appear before generic ones — first match wins.
       3. ingredient cost = (€/100g) × (grams / 100)
-    The function returns the sum across all ingredients, rounded to 2 dp.
+    Returns the sum across all ingredients, rounded to 2 decimal places.
     """
     ingredients = parse_list(ingredients_str)
     total = 0.0
     for ing in ingredients:
         ing_lower = ing.lower()
-
-        # Determine weight from the quantity + unit written in the string
         weight_g = parse_weight_g(ing_lower)
-
-        # First keyword match wins; more specific entries are listed first
         price_per_100g = DEFAULT_PRICE
         for keyword, unit_price in PRICE_TABLE.items():
             if keyword in ing_lower:
                 price_per_100g = unit_price
                 break
-
         total += price_per_100g * (weight_g / 100.0)
     return round(total, 2)
 
@@ -386,11 +340,11 @@ print(f"\nSTEP 8 — Write to SQLite: {DB_PATH}")
 recipes["ingredients"] = recipes["ingredients"].astype(str)
 
 with sqlite3.connect(DB_PATH) as conn:
-    recipes.to_sql("recipes",            conn, if_exists="replace", index=False)
-    inter.to_sql("interactions",         conn, if_exists="replace", index=False)
-    train.to_sql("interactions_train",   conn, if_exists="replace", index=False)
-    val.to_sql("interactions_val",       conn, if_exists="replace", index=False)
-    test.to_sql("interactions_test",     conn, if_exists="replace", index=False)
+    recipes.to_sql("recipes",          conn, if_exists="replace", index=False)
+    inter.to_sql("interactions",       conn, if_exists="replace", index=False)
+    train.to_sql("interactions_train", conn, if_exists="replace", index=False)
+    val.to_sql("interactions_val",     conn, if_exists="replace", index=False)
+    test.to_sql("interactions_test",   conn, if_exists="replace", index=False)
 
 print("  Tables written: recipes, interactions, interactions_train/val/test")
 
