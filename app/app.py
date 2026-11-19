@@ -33,7 +33,7 @@ except requests.exceptions.RequestException:
 if "user_id" in st.session_state:
     st.sidebar.info(f"Signed in as **{st.session_state['name']}** (user {st.session_state['user_id']})")
 
-tab_signup, tab_box = st.tabs(["1. Sign up", "2. My weekly box"])
+tab_signup, tab_box, tab_rate = st.tabs(["1. Sign up", "2. My weekly box", "3. Rate my meals"])
 
 # --- Page 1: sign-up questionnaire -----------------------------------------
 with tab_signup:
@@ -92,3 +92,36 @@ with tab_box:
                 df.columns = ["Meal", "Cuisine", "Price", "Allergens"]
                 st.dataframe(df, hide_index=True)
                 st.caption(f"Recommendations: {data['model']}")
+
+
+                
+# --- Page 3: rate my meals -------------------------------------------------
+with tab_rate:
+    box = st.session_state.get("box")
+    if not box or not box[0]:
+        st.info("Get your weekly box first, then rate the meals you ate.")
+    else:
+        # One rating per distinct meal (a meal can appear twice in the box).
+        meals = {m["id"]: m["name"] for m in box[1]["meals"]}
+        st.write("How did you like your meals? Leave a meal empty if you did not eat it.")
+        with st.form("ratings"):
+            ratings = {}
+            for meal_id, name in meals.items():
+                st.caption(name)
+                ratings[meal_id] = st.feedback("stars", key=f"rate_{meal_id}")
+            sent = st.form_submit_button("Send my ratings")
+
+        if sent:
+            given = {mid: r + 1 for mid, r in ratings.items() if r is not None}  # stars widget returns 0-4
+            if not given:
+                st.warning("Rate at least one meal.")
+            else:
+                errors = 0
+                for meal_id, rating in given.items():
+                    r = requests.post(f"{API_URL}/log_interaction", timeout=5, json={
+                        "user_id": st.session_state["user_id"], "meal_id": meal_id, "rating": rating})
+                    errors += not r.ok
+                if errors:
+                    st.error(f"{errors} rating(s) could not be saved.")
+                else:
+                    st.success(f"Thanks! {len(given)} rating(s) saved.")
