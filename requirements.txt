@@ -4,4 +4,6 @@ pydantic
 streamlit
 requests
 pandas>=2.0
-numpy>=1.24
+numpy>=1.24,<2
+scipy
+torch==2.2.2
