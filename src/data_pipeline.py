@@ -176,8 +176,14 @@ while True:
     prev_size = curr_size
 
 # Restrict val and test to users and recipes seen in filtered train
+val_before, test_before = len(val), len(test)
 val  = val[val["recipe_id"].isin(valid_recipes)  & val["user_id"].isin(valid_users)]
 test = test[test["recipe_id"].isin(valid_recipes) & test["user_id"].isin(valid_users)]
+
+print(f"  Val  interactions removed: {val_before  - len(val):,} "
+      f"({(val_before  - len(val)) / val_before * 100:.1f}%)")
+print(f"  Test interactions removed: {test_before - len(test):,} "
+      f"({(test_before - len(test)) / test_before * 100:.1f}%)")
 
 inter = pd.concat([train, val, test], ignore_index=True)
 

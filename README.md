@@ -25,7 +25,7 @@ data/
   processed/          CSV outputs of the data pipeline
   studeat.db          SQLite database (not versioned)
 src/
-  data_pipeline.py    Data pipeline: filtering, k-core, temporal split, price estimation
+  data_pipeline.py    Data pipeline: filtering, temporal split, k-core (train only), price estimation
   pipeline_config.py  Static configuration of the pipeline
 requirements.txt
 ```
@@ -99,6 +99,24 @@ The API stores student data in two tables of `data/studeat.db`, created automati
 | `app_ratings` | Meal ratings given in the app (user_id, meal_id, rating, timestamp) |
 
 These tables are kept separate from the Food.com tables (`recipes`, `interactions`, `interactions_train`, ...), so that app data never mixes with the training data and is not erased when the data pipeline is run again.
+
+## Test data (end-to-end testing)
+
+To test the full chain without waiting for a real rating campaign, inject synthetic student profiles and ratings:
+
+```bash
+# Insert 8 test users (all diets/allergens covered) and 69 ratings
+python src/seed_test_data.py
+
+# Then test the recommendation endpoint
+# GET http://localhost:8000/recommend/1   → TEST_Alice (vegetarian, gluten-free)
+# GET http://localhost:8000/recommend/2   → TEST_Bob   (no restrictions)
+
+# Remove all test data when done
+python src/seed_test_data.py --clean
+```
+
+Test users are prefixed with `TEST_` so they are easy to identify and clean up.
 
 ## Model interface (agreed with MLE-Core / MLE-Ops)
 
