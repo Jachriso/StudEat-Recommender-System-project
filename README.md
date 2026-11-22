@@ -16,16 +16,17 @@ Personalized weekly ready-meal box for students within a chosen budget range.
 
 ```
 api/
-  main.py           FastAPI backend (endpoints + placeholder predict())
-  mock_data.py      Mock meal catalogue (replaced by Food.com in week 3)
+  main.py             FastAPI backend (endpoints, hard filters, placeholder predict())
+  mock_data.py        Mock meal catalogue (to be replaced by the Food.com recipes)
 app/
-  app.py            Streamlit interface (sign-up + weekly box)
-data
-  processed
-  raw
-studeat.db
-src
-  data_pipeline.py 
+  app.py              Streamlit interface (sign-up, weekly box, meal rating)
+data/
+  raw/                Raw datasets (not versioned, see "Datasets")
+  processed/          CSV outputs of the data pipeline
+  studeat.db          SQLite database (not versioned)
+src/
+  data_pipeline.py    Data pipeline: filtering, k-core, temporal split, price estimation
+  pipeline_config.py  Static configuration of the pipeline
 requirements.txt
 ```
 
@@ -85,6 +86,19 @@ python -m streamlit run app/app.py
 | POST | `/profile` | Create a student profile, returns `user_id` |
 | GET | `/profile/{user_id}` | Read a profile |
 | GET | `/recommend/{user_id}` | Weekly box: meals, total price, budget check |
+| POST | `/log_interaction` | Save a meal rating (1 to 5 stars) with a timestamp |
+| GET | `/interactions/{user_id}` | Ratings given by a student |
+
+## App data (SQLite)
+
+The API stores student data in two tables of `data/studeat.db`, created automatically at startup:
+
+| Table | Content |
+|---|---|
+| `app_users` | Student profiles (diet, allergies, budget range, meals per week) |
+| `app_ratings` | Meal ratings given in the app (user_id, meal_id, rating, timestamp) |
+
+These tables are kept separate from the Food.com tables (`recipes`, `interactions`, `interactions_train`, ...), so that app data never mixes with the training data and is not erased when the data pipeline is run again.
 
 ## Model interface (agreed with MLE-Core / MLE-Ops)
 
