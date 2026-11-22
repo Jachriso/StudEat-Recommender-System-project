@@ -13,14 +13,15 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, model_validator
 
-from api.mock_data import ALLERGENS, DIETS, MEALS
+from api.catalogue import ALLERGENS, DIETS, load_meals
 
 app = FastAPI(title="StudEat API", version="0.4-app-tables")
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "studeat.db"
 
+# Meal catalogue: Food.com recipes from the data pipeline (mock catalogue if not available).
+MEALS, CATALOGUE_SOURCE = load_meals(DB_PATH)
 MEAL_IDS = {m["id"] for m in MEALS}
-
 
 def _get_conn() -> sqlite3.Connection:
     """Return a SQLite connection with row_factory so rows behave like dicts."""
@@ -114,24 +115,33 @@ def predict(user_id: int, budget_min: float, budget_max: float,
 
 
 def compose_box(ranked: list[dict], budget_max: float, k: int) -> list[dict]:
-    """Pick up to k meals (repeats allowed) without exceeding budget_max."""
-    box, total = [], 0.0
+    """Pick k meals by decreasing score without exceeding budget_max.
+
+    Before adding a meal, we check that enough budget is left to fill the
+    remaining slots with the cheapest meal, so the box is always complete.
+    Meals are repeated only if there are fewer candidates than slots.
+    """
     pool = sorted(ranked, key=lambda m: m["score"], reverse=True)
-    i = 0
-    while len(box) < k and pool:
-        meal = pool[i % len(pool)]
-        if total + meal["price"] <= budget_max:
-            box.append(meal)
-            total += meal["price"]
-            i += 1
+    cheapest = min(m["price"] for m in pool)
+    box, total = [], 0.0
+    while len(box) < k:
+        slots_left_after = k - len(box) - 1
+        for meal in pool:
+            if total + meal["price"] + slots_left_after * cheapest <= budget_max:
+                box.append(meal)
+                total += meal["price"]
+                pool.remove(meal)
+                if len(pool) < k - len(box):  
+                    pool.append(meal)
+                break
         else:
-            pool.remove(meal)
+            break  
     return box
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "meals_in_catalogue": len(MEALS)}
+    return {"status": "ok", "meals_in_catalogue": len(MEALS), "catalogue": CATALOGUE_SOURCE}
 
 
 @app.get("/options")

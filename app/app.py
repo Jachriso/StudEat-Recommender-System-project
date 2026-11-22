@@ -24,7 +24,7 @@ def api_get(path):
 # --- API status -------------------------------------------------------------
 try:
     health = api_get("/health").json()
-    st.sidebar.success(f"API connected ({health['meals_in_catalogue']} meals)")
+    st.sidebar.success(f"API connected ({health['meals_in_catalogue']} meals, catalogue: {health.get('catalogue', 'mock')})")
     options = api_get("/options").json()
 except requests.exceptions.RequestException:
     st.sidebar.error(f"API not reachable at {API_URL}. Start it with: python -m uvicorn api.main:app --reload")
@@ -86,10 +86,13 @@ with tab_box:
                 if not data["within_budget"]:
                     st.warning("This box is below your minimum budget.")
 
-                df = pd.DataFrame(data["meals"])[["name", "cuisine", "price", "allergens"]]
+                df = pd.DataFrame(data["meals"])
+                columns = {"name": "Meal", "calories": "Calories", "cuisine": "Cuisine",
+                           "price": "Price", "allergens": "Allergens"}
+                df = df[[c for c in columns if c in df.columns]]
                 df["allergens"] = df["allergens"].apply(lambda a: ", ".join(a) if a else "-")
                 df["price"] = df["price"].map(lambda p: f"{p:.2f} €")
-                df.columns = ["Meal", "Cuisine", "Price", "Allergens"]
+                df = df.rename(columns=columns)
                 st.dataframe(df, hide_index=True)
                 st.caption(f"Recommendations: {data['model']}")
 
