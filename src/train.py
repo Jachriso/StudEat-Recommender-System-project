@@ -20,6 +20,7 @@ Choix a valider avec l'equipe :
 import argparse
 import os
 import time
+import json
 
 import numpy as np
 import pandas as pd
@@ -159,6 +160,13 @@ def main():
                    help="arret si NDCG@10 val ne s'ameliore pas pendant N evaluations")
     p.add_argument("--out", default="models/nlgcl.pt")
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--config", default=None, help="fichier JSON d'hyperparametres")
+
+    pre, _ = p.parse_known_args()
+    if pre.config:
+        with open(pre.config) as f:
+            p.set_defaults(**json.load(f))
+
     args = p.parse_args()
 
     torch.manual_seed(args.seed)
@@ -259,13 +267,21 @@ def main():
 
     # --- 4. evaluation finale sur le test (une seule fois !) ----------------
     print(f"\nmeilleur val NDCG@10 = {best_ndcg:.4f} (epoch {best_epoch})")
+    test_ndcg, test_rec = None, None 
     if test is not None and best_epoch > 0:
         ckpt = torch.load(args.out, map_location=device, weights_only=False)
         model.load_state_dict(ckpt["state_dict"])
         test_csr = to_csr(te_u, te_i, n_users, n_items)
         ndcg, rec, n_eval = evaluate(model, test_csr, [train_csr, val_csr], device)
+        test_ndcg, test_rec = ndcg, rec
         print(f"TEST  NDCG@10={ndcg:.4f}  Recall@20={rec:.4f}  ({n_eval} users)")
     print(f"checkpoint : {args.out}  (ne pas le committer dans git)")
+
+    results = {"config": vars(args), "best_epoch": best_epoch,
+               "best_val_ndcg10": best_ndcg,
+               "test_ndcg10": test_ndcg, "test_recall20": test_rec}
+    with open(args.out.replace(".pt", "_results.json"), "w") as f:
+        json.dump(results, f, indent=2)
 
 
 if __name__ == "__main__":
