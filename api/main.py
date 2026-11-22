@@ -4,6 +4,7 @@ Run from the project root:
 Interactive docs: http://localhost:8000/docs
 """
 
+import json
 import random
 import sqlite3
 from datetime import datetime, timezone
@@ -14,12 +15,10 @@ from pydantic import BaseModel, Field, model_validator
 
 from api.mock_data import ALLERGENS, DIETS, MEALS
 
-app = FastAPI(title="StudEat API", version="0.3-sqlite")
+app = FastAPI(title="StudEat API", version="0.4-app-tables")
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "studeat.db"
 
-# In-memory storage for profiles (no persistence needed across sessions).
-PROFILES: dict[int, dict] = {}
 MEAL_IDS = {m["id"] for m in MEALS}
 
 
@@ -28,6 +27,50 @@ def _get_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def init_app_tables() -> None:
+    """Create the tables of the app if they do not exist yet.
+
+    They are kept separate from the Food.com tables (recipes, interactions, ...)
+    so that student data never mixes with the training data and is not erased
+    when the data pipeline is run again.
+    """
+    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with _get_conn() as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS app_users (
+                user_id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                name           TEXT    NOT NULL,
+                diet           TEXT    NOT NULL,
+                allergies      TEXT    NOT NULL,   -- JSON list, e.g. ["gluten"]
+                budget_min     REAL    NOT NULL,
+                budget_max     REAL    NOT NULL,
+                meals_per_week INTEGER NOT NULL,
+                created_at     TEXT    NOT NULL
+            )""")
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS app_ratings (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id   INTEGER NOT NULL REFERENCES app_users(user_id),
+                meal_id   INTEGER NOT NULL,
+                rating    INTEGER NOT NULL CHECK (rating BETWEEN 1 AND 5),
+                timestamp TEXT    NOT NULL
+            )""")
+
+
+def load_profile(user_id: int) -> dict | None:
+    """Read a student profile from the database (None if unknown)."""
+    with _get_conn() as conn:
+        row = conn.execute("SELECT * FROM app_users WHERE user_id = ?", (user_id,)).fetchone()
+    if row is None:
+        return None
+    profile = dict(row)
+    profile["allergies"] = json.loads(profile["allergies"])
+    return profile
+
+
+init_app_tables()
 
 
 class Profile(BaseModel):
@@ -99,23 +142,31 @@ def options():
 
 @app.post("/profile")
 def create_profile(profile: Profile):
-    user_id = max(PROFILES, default=0) + 1
-    PROFILES[user_id] = profile.model_dump()
-    return {"user_id": user_id, "profile": PROFILES[user_id]}
+    p = profile.model_dump()
+    with _get_conn() as conn:
+        cur = conn.execute(
+            "INSERT INTO app_users (name, diet, allergies, budget_min, budget_max, meals_per_week, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (p["name"], p["diet"], json.dumps(p["allergies"]), p["budget_min"], p["budget_max"],
+             p["meals_per_week"], datetime.now(timezone.utc).isoformat()),
+        )
+        user_id = cur.lastrowid
+    return {"user_id": user_id, "profile": p}
 
 
 @app.get("/profile/{user_id}")
 def get_profile(user_id: int):
-    if user_id not in PROFILES:
+    profile = load_profile(user_id)
+    if profile is None:
         raise HTTPException(status_code=404, detail="Unknown user")
-    return PROFILES[user_id]
+    return profile
 
 
 @app.get("/recommend/{user_id}")
 def recommend(user_id: int):
-    if user_id not in PROFILES:
+    p = load_profile(user_id)
+    if p is None:
         raise HTTPException(status_code=404, detail="Unknown user")
-    p = PROFILES[user_id]
     k = p["meals_per_week"]
 
     candidates = hard_filters(p["allergies"], p["diet"])
@@ -151,26 +202,24 @@ class Interaction(BaseModel):
 
 @app.post("/log_interaction")
 def log_interaction(interaction: Interaction):
-    if interaction.user_id not in PROFILES:
+    if load_profile(interaction.user_id) is None:
         raise HTTPException(status_code=404, detail="Unknown user")
     if interaction.meal_id not in MEAL_IDS:
         raise HTTPException(status_code=404, detail="Unknown meal")
     timestamp = datetime.now(timezone.utc).isoformat()
-    # meal_id is stored as recipe_id to match the interactions table schema
     with _get_conn() as conn:
         conn.execute(
-            "INSERT INTO interactions (user_id, recipe_id, rating, date) VALUES (?, ?, ?, ?)",
+            "INSERT INTO app_ratings (user_id, meal_id, rating, timestamp) VALUES (?, ?, ?, ?)",
             (interaction.user_id, interaction.meal_id, interaction.rating, timestamp),
         )
-    record = {**interaction.model_dump(), "timestamp": timestamp}
-    return {"message": "rating saved", "interaction": record}
+    return {"message": "rating saved", "interaction": {**interaction.model_dump(), "timestamp": timestamp}}
 
 
 @app.get("/interactions/{user_id}")
 def get_interactions(user_id: int):
     with _get_conn() as conn:
         rows = conn.execute(
-            "SELECT recipe_id AS meal_id, rating, date AS timestamp FROM interactions WHERE user_id = ?",
+            "SELECT meal_id, rating, timestamp FROM app_ratings WHERE user_id = ? ORDER BY timestamp",
             (user_id,),
         ).fetchall()
     return [dict(r) for r in rows]
