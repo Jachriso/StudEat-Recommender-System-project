@@ -124,47 +124,9 @@ print(f"  Interactions after dedup: {len(inter):,}")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 5. K-core filtering
-#    Separate thresholds: recipes need more signal than users.
-#    MIN_K_RECIPE = 5: a recipe rated fewer than 5 times has weak collaborative
-#                      signal and would produce a noisy embedding.
-#    MIN_K_USER   = 3: even 3 ratings give the GNN enough to learn from,
-#                      and a higher threshold would discard too many users.
+# 5. Temporal split 70 / 15 / 15  (BEFORE k-core to prevent leakage)
 # ═════════════════════════════════════════════════════════════════════════════
-print("\nSTEP 5 — K-core filtering (min 5 per recipe, min 3 per user)")
-
-MIN_K_RECIPE = 5
-MIN_K_USER   = 3
-
-prev_size = -1
-iteration = 0
-
-while True:
-    iteration += 1
-    valid_recipes = set(inter["recipe_id"].value_counts()[lambda x: x >= MIN_K_RECIPE].index)
-    valid_users   = set(inter["user_id"].value_counts()[lambda x: x >= MIN_K_USER].index)
-    inter = inter[
-        inter["recipe_id"].isin(valid_recipes) &
-        inter["user_id"].isin(valid_users)
-    ]
-    curr_size = len(inter)
-    print(f"  Iteration {iteration}: {curr_size:,} interactions")
-    if curr_size == prev_size:
-        break
-    prev_size = curr_size
-
-recipes = recipes[recipes["id"].isin(set(inter["recipe_id"].unique()))]
-recipes = recipes.drop(columns=["tags_list"])
-
-n_users   = inter["user_id"].nunique()
-n_recipes = recipes["id"].nunique()
-print(f"  Final: {len(inter):,} interactions | {n_recipes:,} recipes | {n_users:,} users")
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# 6. Temporal split 70 / 15 / 15
-# ═════════════════════════════════════════════════════════════════════════════
-print("\nSTEP 6 — Temporal split 70/15/15")
+print("\nSTEP 5 — Temporal split 70/15/15")
 
 inter_sorted = inter.sort_values("date").reset_index(drop=True)
 n         = len(inter_sorted)
@@ -179,6 +141,53 @@ print(f"  Train: {len(train):,} | Val: {len(val):,} | Test: {len(test):,}")
 print(f"  Train period : {train['date'].min().date()} → {train['date'].max().date()}")
 print(f"  Val period   : {val['date'].min().date()} → {val['date'].max().date()}")
 print(f"  Test period  : {test['date'].min().date()} → {test['date'].max().date()}")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 6. K-core filtering on TRAIN only
+#    Applied after the split so test data never influences which users/recipes
+#    are kept — prevents the subtle leakage that occurred when k-core ran on
+#    the full dataset.
+#    MIN_K_RECIPE = 5: a recipe rated fewer than 5 times has weak collaborative
+#                      signal and would produce a noisy embedding.
+#    MIN_K_USER   = 3: even 3 ratings give the GNN enough to learn from,
+#                      and a higher threshold would discard too many users.
+# ═════════════════════════════════════════════════════════════════════════════
+print("\nSTEP 6 — K-core filtering on train (min 5 per recipe, min 3 per user)")
+
+MIN_K_RECIPE = 5
+MIN_K_USER   = 3
+
+prev_size = -1
+iteration = 0
+
+while True:
+    iteration += 1
+    valid_recipes = set(train["recipe_id"].value_counts()[lambda x: x >= MIN_K_RECIPE].index)
+    valid_users   = set(train["user_id"].value_counts()[lambda x: x >= MIN_K_USER].index)
+    train = train[
+        train["recipe_id"].isin(valid_recipes) &
+        train["user_id"].isin(valid_users)
+    ]
+    curr_size = len(train)
+    print(f"  Iteration {iteration}: {curr_size:,} train interactions")
+    if curr_size == prev_size:
+        break
+    prev_size = curr_size
+
+# Restrict val and test to users and recipes seen in filtered train
+val  = val[val["recipe_id"].isin(valid_recipes)  & val["user_id"].isin(valid_users)]
+test = test[test["recipe_id"].isin(valid_recipes) & test["user_id"].isin(valid_users)]
+
+inter = pd.concat([train, val, test], ignore_index=True)
+
+recipes = recipes[recipes["id"].isin(valid_recipes)]
+recipes = recipes.drop(columns=["tags_list"])
+
+n_users   = train["user_id"].nunique()
+n_recipes = recipes["id"].nunique()
+print(f"  Final: {len(train):,} train | {len(val):,} val | {len(test):,} test")
+print(f"  {n_recipes:,} recipes | {n_users:,} users")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
