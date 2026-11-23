@@ -38,13 +38,14 @@ def build_norm_adj(tr_u, tr_i, n_users, n_items):
 
 class NLGCL(nn.Module):
     def __init__(self, n_users, n_items, adj, dim=64, n_layers=3,
-                 tau=0.2, lambda_cl=0.1):
+                 tau=0.2, lambda_cl=0.1, reg=1e-2):
         super().__init__()
         self.n_users = n_users
         self.n_items = n_items
         self.n_layers = n_layers
         self.tau = tau
         self.lambda_cl = lambda_cl
+        self.reg = reg                  # poids de la regularisation L2 des embeddings de depart
 
         self.emb = nn.Embedding(n_users + n_items, dim)
         nn.init.normal_(self.emb.weight, std=0.1)
@@ -69,18 +70,21 @@ class NLGCL(nn.Module):
         return layers
 
     def final_embeddings(self):
-        """Embeddings finaux = moyenne des couches 0..L, L2-normalisés."""
+        """Embeddings finaux = moyenne des couches 0..L (pas de normalisation L2 :
+        elle faisait chuter le NDCG@10 de 0.023 a 0.004)."""
         E = torch.stack(self.propagate(), dim=0).mean(dim=0)
         return E[: self.n_users], E[self.n_users:]
 
     def contrastive_loss(self, layers, users, pos_items):
-        """InfoNCE entre couches consécutives (style SGL).
+        """InfoNCE entre couches consécutives (NLGCL).
 
         Pour chaque couche l (0..L-1) :
           - vue 1 : embeddings de la couche l
           - vue 2 : embeddings de la couche l+1
-          - positifs : même nœud (user ou item) entre les deux vues
-          - négatifs : autres nœuds du batch
+          - positifs : voisins (user u de la couche l avec l'item i qu'il a aimé
+            a la couche l+1, et inversement) ; dans le batch, users[k] et
+            pos_items[k] forment une vraie interaction
+          - négatifs : autres éléments du batch
         """
         if self.lambda_cl == 0.0:
             return torch.tensor(0.0, device=self.emb.weight.device)
@@ -117,26 +121,36 @@ class NLGCL(nn.Module):
         return -(pos - neg).mean()
 
     def forward(self, users, pos_items, neg_items):
-        U, V = self.final_embeddings()
-        u = U[users]
-        p = V[pos_items]
-        n = V[neg_items]
-        pos_scores = (u * p).sum(dim=1)
-        neg_scores = (u * n).sum(dim=1)
-        # BPR loss
-        loss_rec = -F.logsigmoid(pos_scores - neg_scores).mean()
-        u0 = self.emb.weight[users]
-        p0 = self.emb.weight[self.n_users + pos_items]
-        n0 = self.emb.weight[self.n_users + neg_items]
-        reg = (u0.pow(2).sum() + p0.pow(2).sum() + n0.pow(2).sum()) / (2 * len(users))
-        loss_rec = loss_rec + 1e-2 * reg
+        """Retourne (loss_totale, dict des composantes) pour un batch (u, i+, i-).
 
+        Le dict {"bpr", "l2", "cl"} (floats) est lu par train.py pour les logs.
+        """
+        layers = self.propagate()
+        E = torch.stack(layers, dim=0).mean(dim=0)
+        u = E[users]
+        p = E[self.n_users + pos_items]
+        n = E[self.n_users + neg_items]
+
+        # 1) BPR : l'item aime doit avoir un score > item non vu
+        bpr = -F.logsigmoid((u * p).sum(dim=1) - (u * n).sum(dim=1)).mean()
+
+        # 2) regularisation L2 sur les embeddings de depart (couche 0)
+        E0 = self.emb.weight
+        l2 = (E0[users].pow(2).sum() + E0[self.n_users + pos_items].pow(2).sum()
+              + E0[self.n_users + neg_items].pow(2).sum()) / (2 * users.size(0))
+
+        # 3) loss contrastive entre couches voisines (0 si LightGCN)
         if self.lambda_cl > 0:
-            layers = self.propagate()
-            loss_cl = self.contrastive_loss(layers, users, pos_items)
-            loss = loss_rec + self.lambda_cl * loss_cl
+            cl = self.contrastive_loss(layers, users, pos_items)
         else:
-            loss_cl = torch.tensor(0.0, device=loss_rec.device)
-            loss = loss_rec
+            cl = torch.zeros((), device=users.device)
 
-        return loss, loss_cl
+        total = bpr + self.reg * l2 + self.lambda_cl * cl
+        return total, {"bpr": bpr.item(), "l2": l2.item(), "cl": cl.item()}
+
+    @torch.no_grad()
+    def score_all_items(self, user_idx):
+        """Scores d'un user (int ou tenseur de users) contre tous les items."""
+        U, V = self.final_embeddings()
+        u = U[user_idx]
+        return u @ V.T
