@@ -12,6 +12,14 @@ TARGET_TAGS = {
 # Tags that disqualify a recipe even if it matches TARGET_TAGS.
 # "oven" and "pasta-rice-and-grains" were too broad and caught desserts/sides,
 # so they were removed from TARGET_TAGS and non-mains are excluded explicitly.
+# Recipe names containing these words are excluded regardless of their tags.
+# Catches miscategorized recipes (e.g. "Southern BBQ Sauce" tagged main-dish).
+NAME_EXCLUDE_KEYWORDS = {
+    "sauce", "dressing", "marinade", "rub", "dip", "spread",
+    "glaze", "gravy", "syrup", "jam", "jelly", "relish",
+    "chutney", "pickle", "vinaigrette", "condiment",
+}
+
 EXCLUDE_TAGS = {
     "desserts", "side-dishes", "snacks", "appetizers",
     "beverages", "condiments-etc", "breakfast", "brunch",

@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from pipeline_config import UNIT_TO_G, CATEGORY_TAG_MAP, STATIC_FALLBACK, TARGET_TAGS, EXCLUDE_TAGS
+from pipeline_config import UNIT_TO_G, CATEGORY_TAG_MAP, STATIC_FALLBACK, TARGET_TAGS, EXCLUDE_TAGS, NAME_EXCLUDE_KEYWORDS
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 ROOT      = Path(__file__).resolve().parent.parent
@@ -46,6 +46,12 @@ mask_include = recipes["tags_list"].apply(lambda t: bool(set(t) & TARGET_TAGS))
 mask_exclude = recipes["tags_list"].apply(lambda t: bool(set(t) & EXCLUDE_TAGS))
 recipes = recipes[mask_include & ~mask_exclude].copy()
 print(f"  After tag filter: {len(recipes):,} recipes")
+
+mask_name = recipes["name"].str.lower().apply(
+    lambda n: not any(kw in n for kw in NAME_EXCLUDE_KEYWORDS)
+)
+recipes = recipes[mask_name].copy()
+print(f"  After name filter: {len(recipes):,} recipes")
 recipes = recipes.drop(columns=["tags_list"])
 
 
