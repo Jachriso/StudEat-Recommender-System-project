@@ -24,7 +24,7 @@ def load_splits(data_dir="data/processed", user_col="user_id", item_col="recipe_
                 rating_col="rating", pos_threshold=4):
     """Read train/val/test and return a dict of sparse matrices (users x items).
 
-    Keys: train_pos, train_all, val_pos, test_pos, n_users, n_items,
+    Keys: train_pos, train_all, val_pos, val_all, test_pos, n_users, n_items,
           user_ids, item_ids, stats (number of kept/ignored interactions).
     """
     cols = [user_col, item_col, rating_col]
@@ -57,6 +57,8 @@ def load_splits(data_dir="data/processed", user_col="user_id", item_col="recipe_
     out["train_pos"], _, _ = to_csr(tr_pos)
     # ALL training interactions (including ratings below threshold), for the mask
     out["train_all"], _, _ = to_csr(raw["train"][[user_col, item_col]].drop_duplicates())
+    # ALL validation interactions, to mask them on the test split (--mask all)
+    out["val_all"], _, _ = to_csr(raw["val"][[user_col, item_col]].drop_duplicates())
     for s in ("val", "test"):
         out[f"{s}_pos"], kept, dropped = to_csr(positives(raw[s]))
         out["stats"][s] = {"kept": kept, "dropped": dropped}
@@ -67,13 +69,13 @@ def load_splits(data_dir="data/processed", user_col="user_id", item_col="recipe_
 # Metrics
 # ----------------------------------------------------------------------------
 def _top_k(scores, k):
-    """Indices of the k highest scores per row (ties: smallest index first)."""
+    """Indices of the k highest scores per row (ties: smallest index first).
+
+    A stable sort keeps tied items in index order, so the result is fully
+    deterministic, even when ties straddle the k-th position (Most-Popular).
+    """
     k = min(k, scores.shape[1])
-    part = np.argpartition(-scores, k - 1, axis=1)[:, :k]
-    rows = np.arange(scores.shape[0])[:, None]
-    # sort the k candidates: descending score, then ascending index
-    order = np.lexsort((part, -scores[rows, part]), axis=1)
-    return part[rows, order]
+    return np.argsort(-scores, axis=1, kind="stable")[:, :k]
 
 
 def evaluate_scores(score_fn, truth, masks, k_ndcg=10, k_rec=20, chunk=1024):
@@ -101,7 +103,8 @@ def evaluate_scores(score_fn, truth, masks, k_ndcg=10, k_rec=20, chunk=1024):
         n_rel = rel.sum(axis=1)
 
         recalls.append(hits[:, :k_rec].sum(axis=1) / n_rel)
-        dcg = (hits[:, :k_ndcg] * discount[:hits.shape[1]]).sum(axis=1)
+        top_ndcg = hits[:, :k_ndcg]
+        dcg = (top_ndcg * discount[:top_ndcg.shape[1]]).sum(axis=1)
         ndcgs.append(dcg / idcg[np.minimum(n_rel, k_ndcg) - 1])
     return float(np.concatenate(ndcgs).mean()), float(np.concatenate(recalls).mean()), len(users)
 
