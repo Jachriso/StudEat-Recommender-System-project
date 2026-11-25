@@ -15,9 +15,12 @@ Usage (from the project root):
   python src/run_benchmark.py --models nlgcl=configs/nlgcl.json nlgcl_neg=configs/nlgcl_neg.json
   python src/run_benchmark.py --extra-rows reports/risk_control_rows.json
 
---extra-rows adds rows computed by other scripts (e.g. NLGCL + risk control), as a JSON list:
-  [{"model": "NLGCL + risk control", "val_ndcg": [..], "test_ndcg": [..], "test_recall": [..]}]
-(one value per seed; "unwanted_rate": [..] is optional).
+--extra-rows adds rows computed by other scripts (e.g. the risk-control ablation), as a JSON list:
+  [{"model": "NLGCL (no risk control)", "val_ndcg": [..], "test_ndcg": [..],
+    "test_recall": [..], "unwanted_rate": [..]},
+   {"model": "NLGCL + risk control (alpha = 0.01)", ...}]
+"model" is required. "val_ndcg", "test_ndcg", "test_recall" and "unwanted_rate" hold one value
+per seed; a missing metric is shown as "n/a" in the table.
 """
 import argparse
 import json
@@ -81,11 +84,16 @@ def load_embeddings(path, d):
 
 
 def fmt(values, digits=4):
-    """Mean ± std over seeds (only the mean when there is a single value)."""
+    """Mean ± sample std over seeds (ddof=1); only the value when there is a single one."""
     v = np.asarray(values, dtype=float)
     if len(v) == 1:
         return f"{v[0]:.{digits}f}"
-    return f"{v.mean():.{digits}f} ± {v.std():.{digits}f}"
+    return f"{v.mean():.{digits}f} ± {v.std(ddof=1):.{digits}f}"
+
+
+def cell(row, key):
+    """Formatted metric of a row, or "n/a" when the row does not provide it."""
+    return fmt(row[key]) if row.get(key) else "n/a"
 
 
 def main():
@@ -146,6 +154,8 @@ def main():
     for path in a.extra_rows:
         with open(path, encoding="utf-8") as f:
             for r in json.load(f):
+                if "model" not in r:
+                    sys.exit(f"{path}: every extra row needs a \"model\" name")
                 rows.append(r)
                 print(f"{r['model']:<28} (from {path})")
 
@@ -158,9 +168,10 @@ def main():
         sep += "---|"
     lines = [header, sep]
     for r in rows:
-        line = f"| {r['model']} | {fmt(r['val_ndcg'])} | {fmt(r['test_ndcg'])} | {fmt(r['test_recall'])} |"
+        line = (f"| {r['model']} | {cell(r, 'val_ndcg')} | {cell(r, 'test_ndcg')} "
+                f"| {cell(r, 'test_recall')} |")
         if has_unwanted:
-            line += f" {fmt(r['unwanted_rate']) if 'unwanted_rate' in r else 'n/a'} |"
+            line += f" {cell(r, 'unwanted_rate')} |"
         lines.append(line)
     table = "\n".join(lines)
 
@@ -174,7 +185,7 @@ def main():
 **Protocol.** Temporal split produced by `src/data_pipeline.py`; every row is evaluated with the
 shared harness `src/evaluation.py` (NDCG@10, Recall@20, full-catalogue ranking, already-seen items
 masked, positives = ratings ≥ 4). Models are selected on validation (early stopping in `train.py`);
-the test split is used once per checkpoint. Values are mean ± std over seeds {a.seeds}
+the test split is used once per checkpoint. Values are mean ± sample std (ddof = 1) over seeds {a.seeds}
 (Random: {a.random_seeds} seeds; Most-Popular is deterministic).
 
 **Data.** {d['n_users']:,} users and {d['n_items']:,} recipes in the training split,
