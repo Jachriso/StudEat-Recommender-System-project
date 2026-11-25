@@ -20,11 +20,13 @@ Choix a valider avec l'equipe :
 import argparse
 import os
 import time
+import json
 
 import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 import torch
+import torch.nn.functional as F
 
 from model_nlgcl import NLGCL, build_norm_adj
 
@@ -116,6 +118,22 @@ def evaluate(model, truth, masks, device, chunk=1024, k_ndcg=10, k_rec=20):
     return (torch.cat(ndcgs).mean().item(), torch.cat(recalls).mean().item(),
             len(users))
 
+@torch.no_grad()
+def val_bpr_loss(model, va_u, va_i, sampler, device, chunk=10000):
+    """BPR moyenne sur les paires de validation."""
+    model.eval()
+    U, V = model.final_embeddings()
+    va_n = sampler.sample(va_u)       # un négatif par paire val
+    total = 0.0
+    for s in range(0, len(va_u), chunk):
+        u = U[torch.as_tensor(va_u[s:s + chunk], device=device)]
+        p = V[torch.as_tensor(va_i[s:s + chunk], device=device)]   # embeddings des items positifs (attention : V, pas d'offset n_users)
+        n = V[torch.as_tensor(va_n[s:s + chunk], device=device)]   # embeddings des items négatifs
+        # score = produit scalaire user·item ; BPR = -logsigmoid(score_pos - score_neg)
+        total += (-F.logsigmoid((u * p).sum(dim=1) - (u * n).sum(dim=1))).sum().item()   # SOMME sur le paquet (pas la moyenne), en float Python
+    model.train()
+    return total / len(va_u)
+
 
 # ----------------------------------------------------------------------------
 # Main
@@ -142,6 +160,13 @@ def main():
                    help="arret si NDCG@10 val ne s'ameliore pas pendant N evaluations")
     p.add_argument("--out", default="models/nlgcl.pt")
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--config", default=None, help="fichier JSON d'hyperparametres")
+
+    pre, _ = p.parse_known_args()
+    if pre.config:
+        with open(pre.config) as f:
+            p.set_defaults(**json.load(f))
+
     args = p.parse_args()
 
     torch.manual_seed(args.seed)
@@ -183,9 +208,11 @@ def main():
                   tau=args.tau, lambda_cl=lam).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
     sampler = NegSampler(tr_u, tr_i, n_items, seed=args.seed)
+    val_sampler = NegSampler(tr_u, tr_i, n_items, seed=args.seed + 1)
 
     # --- 3. entrainement ----------------------------------------------------
     best_ndcg, best_epoch, bad_evals = -1.0, 0, 0
+    history =[]
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
 
     def save_ckpt():
@@ -197,6 +224,8 @@ def main():
         t0 = time.time()
         perm = np.random.permutation(len(tr_u))
         tot, n_b = 0.0, 0
+        sum_bpr, sum_cl = 0.0, 0.0 
+
         for s in range(0, len(perm), args.batch_size):
             idx = perm[s:s + args.batch_size]
             if len(idx) < 2:
@@ -204,13 +233,19 @@ def main():
             u = torch.as_tensor(tr_u[idx], device=device)
             pos = torch.as_tensor(tr_i[idx], device=device)
             neg = torch.as_tensor(sampler.sample(tr_u[idx]), device=device)
-            loss, _ = model(u, pos, neg)
+            loss, parts = model(u, pos, neg)
             opt.zero_grad()
             loss.backward()
             opt.step()
             tot += loss.item()
             n_b += 1
-        msg = f"epoch {epoch:3d}  loss={tot / max(n_b, 1):.4f}  ({time.time() - t0:.0f}s)"
+            sum_bpr += parts["bpr"]
+            sum_cl += parts["cl"]
+        n_b = max(n_b, 1)
+        vloss = val_bpr_loss(model, va_u, va_i, val_sampler, device)
+        msg = f"epoch {epoch:3d}  loss={tot / n_b:.4f}  bpr={sum_bpr / n_b:.4f}  cl={sum_cl / n_b:.4f}  val_bpr={vloss:.4f}  ({time.time() - t0:.0f}s)"
+
+        ndcg, rec = None, None
 
         if epoch % args.eval_every == 0 or epoch == args.epochs:
             ndcg, rec, n_eval = evaluate(model, val_csr, [train_csr], device)
@@ -221,19 +256,32 @@ def main():
             else:
                 bad_evals += 1
         print(msg)
+
+        history.append({"epoch": epoch, "train_loss": tot / n_b, "train_bpr": sum_bpr / n_b, "train_cl": sum_cl / n_b,
+                        "val_bpr": vloss, "val_ndcg10": ndcg, "val_recall20": rec})
+        pd.DataFrame(history).to_csv(args.out.replace(".pt", "_history.csv"), index=False)
+
         if bad_evals >= args.patience:
             print(f"arret anticipe (meilleur epoch = {best_epoch})")
             break
 
     # --- 4. evaluation finale sur le test (une seule fois !) ----------------
     print(f"\nmeilleur val NDCG@10 = {best_ndcg:.4f} (epoch {best_epoch})")
+    test_ndcg, test_rec = None, None 
     if test is not None and best_epoch > 0:
         ckpt = torch.load(args.out, map_location=device, weights_only=False)
         model.load_state_dict(ckpt["state_dict"])
         test_csr = to_csr(te_u, te_i, n_users, n_items)
         ndcg, rec, n_eval = evaluate(model, test_csr, [train_csr, val_csr], device)
+        test_ndcg, test_rec = ndcg, rec
         print(f"TEST  NDCG@10={ndcg:.4f}  Recall@20={rec:.4f}  ({n_eval} users)")
     print(f"checkpoint : {args.out}  (ne pas le committer dans git)")
+
+    results = {"config": vars(args), "best_epoch": best_epoch,
+               "best_val_ndcg10": best_ndcg,
+               "test_ndcg10": test_ndcg, "test_recall20": test_rec}
+    with open(args.out.replace(".pt", "_results.json"), "w") as f:
+        json.dump(results, f, indent=2)
 
 
 if __name__ == "__main__":
