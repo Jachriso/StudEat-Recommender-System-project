@@ -21,7 +21,8 @@ data/
 *.csv
 *.parquet
 *.pt
-models/
+models/*
+!models/embeddings.npz
 
 # ── Notebooks checkpoints ─────────────────────────────────────────────────────
 .ipynb_checkpoints/
