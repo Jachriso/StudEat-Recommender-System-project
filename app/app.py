@@ -40,7 +40,11 @@ with tab_signup:
     with st.form("profile"):
         name = st.text_input("First name")
         diet = st.selectbox("Diet", options["diets"])
-        allergies = st.multiselect("Allergies", options["allergens"])
+        allergies = st.multiselect(
+            "Allergies", options["allergens"],
+            format_func=lambda a: "tree nuts" if a == "nuts" else a,
+            help="Peanuts are not tree nuts: if you are allergic to both, tick both.",
+        )
         budget = st.slider("Weekly budget (EUR)", 20, 80, (35, 50))
         meals = st.number_input("Meals per week", min_value=1, max_value=14, value=10)
         submitted = st.form_submit_button("Create my profile")
