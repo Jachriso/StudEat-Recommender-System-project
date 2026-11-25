@@ -236,7 +236,7 @@ def seed() -> None:
                 inserted_ratings += 1
 
             print(f"  inserted: {user['name']} (user_id={user_id}, "
-                  f"{len(user['ratings'])} ratings, diet={user['diet']})")
+                  f"{len(sampled_ids)} ratings, diet={user['diet']})")
 
     print(f"\nDone: {inserted_users} users, {inserted_ratings} ratings added.")
 
