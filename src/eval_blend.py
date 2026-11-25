@@ -97,7 +97,13 @@ def main():
     print(f"\nw choisi (validation) = {best_w}")
     print(f"TEST NDCG@10 = {t[:, 0].mean():.4f} +/- {t[:, 0].std():.4f}   "
           f"Recall@20 = {t[:, 1].mean():.4f} +/- {t[:, 1].std():.4f}")
-    print("Reference popularite : val 0.0228 | test NDCG@10 0.0239 | test Recall@20 0.0528")
+
+    # popularity reference computed on the SAME data / masks (no hardcoded numbers)
+    pop = torch.as_tensor(np.bincount(tr_i, minlength=n_items), dtype=torch.float32)
+    pop_model = Shim(torch.ones(n_users, 1), pop.unsqueeze(1))
+    pv, _, _ = evaluate(pop_model, val_csr, [train_csr], dev)
+    pn, pr, _ = evaluate(pop_model, test_csr, [train_csr, val_csr], dev)
+    print(f"Most-Popular (same data): val NDCG@10 {pv:.4f} | test NDCG@10 {pn:.4f} | test Recall@20 {pr:.4f}")
 
 
 if __name__ == "__main__":

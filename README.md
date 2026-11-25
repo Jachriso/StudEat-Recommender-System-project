@@ -115,6 +115,14 @@ python src/plot_history.py models/nlgcl_history.csv
 # Baselines (Random, Most-Popular) with the same evaluation protocol
 python src/baselines.py
 
+# Optional training options (off by default; they did not help in our tuning)
+#   --mask-dup     mask duplicate ids as false negatives in the InfoNCE loss
+#   --neg-alpha A  sample negatives proportionally to popularity^A (0 = uniform)
+python src/train.py --config configs/nlgcl.json --lambda-cl 0.01 --neg-alpha 0.5 --mask-dup
+
+# Blend of the model score with item popularity (weight w chosen on validation, test read once)
+python src/eval_blend.py --ckpt models/nlgcl_s0.pt models/nlgcl_s1.pt models/nlgcl_s2.pt
+
 # Results by user-activity level
 python src/eval_by_activity.py --ckpt models/nlgcl.pt
 
