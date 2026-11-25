@@ -5,6 +5,7 @@ Interactive docs: http://localhost:8000/docs
 """
 
 import json
+import os
 import random
 import sqlite3
 from datetime import datetime, timezone
@@ -14,14 +15,25 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, model_validator
 
 from api.catalogue import ALLERGENS, DIETS, load_meals
+from api.model import EMB_PATH, StudEatModel
 
-app = FastAPI(title="StudEat API", version="0.4-app-tables")
+app = FastAPI(title="StudEat API", version="0.6-model")
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "studeat.db"
 
 # Meal catalogue: Food.com recipes from the data pipeline (mock catalogue if not available).
 MEALS, CATALOGUE_SOURCE = load_meals(DB_PATH)
 MEAL_IDS = {m["id"] for m in MEALS}
+
+# Recommendation model (NLGCL embeddings + fold-in + risk control), loaded once at startup.
+# Plan B: if the embeddings file is missing, the API still works with random scores.
+EMB_FILE = Path(os.getenv("STUDEAT_EMB_PATH", EMB_PATH))
+try:
+    MODEL = StudEatModel(emb_path=EMB_FILE)
+except (FileNotFoundError, OSError, KeyError) as e:
+    print(f"[StudEat] Model not loaded ({e}). Falling back to random scores.")
+    MODEL = None
+
 
 def _get_conn() -> sqlite3.Connection:
     """Return a SQLite connection with row_factory so rows behave like dicts."""
@@ -102,16 +114,30 @@ def hard_filters(allergies: list[str], diet: str) -> list[dict]:
     ]
 
 
-def predict(user_id: int, budget_min: float, budget_max: float,
-            allergies: list[str], diet: str, k: int = 10) -> list[dict]:
-    """Placeholder for the real model.
+def liked_meal_ids(user_id: int) -> list[int]:
+    """Meals the student rated 4 or 5 stars in the app (used for the fold-in)."""
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT DISTINCT meal_id FROM app_ratings WHERE user_id = ? AND rating >= 4", (user_id,)
+        ).fetchall()
+    return [r["meal_id"] for r in rows]
 
-    Agreed interface with MLE-Core / MLE-Ops: returns k meals with a score.
-    Week 2: random scores. Week 3: NLGCL scores + risk control.
+
+def predict(user_id: int, budget_min: float, budget_max: float,
+            allergies: list[str], diet: str, k: int = 10) -> tuple[list[dict], str]:
+    """Rank the meals the student can eat; return (top-k meals with a score, source).
+
+    Agreed interface with MLE-Core / MLE-Ops. The ranking itself is done by
+    StudEatModel (api/model.py): fold-in on the student's liked meals, popularity
+    if they have not rated anything yet, and risk control. Random scores if the
+    model could not be loaded (plan B).
     """
     candidates = hard_filters(allergies, diet)
-    random.shuffle(candidates)
-    return [{**m, "score": round(random.random(), 3)} for m in candidates[:k]]
+    if MODEL is None:
+        random.shuffle(candidates)
+        return [{**m, "score": round(random.random(), 3)} for m in candidates[:k]], "random (model not loaded)"
+    ranked, source = MODEL.rank(candidates, liked_meal_ids(user_id))
+    return ranked[:k], source
 
 
 def _copies(candidates: list[dict], k: int) -> list[dict]:
@@ -164,7 +190,8 @@ def compose_box(ranked: list[dict], budget_max: float, k: int) -> list[dict]:
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "meals_in_catalogue": len(MEALS), "catalogue": CATALOGUE_SOURCE}
+    return {"status": "ok", "meals_in_catalogue": len(MEALS), "catalogue": CATALOGUE_SOURCE,
+            "model_loaded": MODEL is not None}
 
 
 @app.get("/options")
@@ -215,7 +242,7 @@ def recommend(user_id: int):
             detail=f"Budget too low: a box of {k} meals starts at {min_feasible} EUR with these constraints",
         )
 
-    ranked = predict(user_id, p["budget_min"], p["budget_max"], p["allergies"], p["diet"], k=len(candidates))
+    ranked, source = predict(user_id, p["budget_min"], p["budget_max"], p["allergies"], p["diet"], k=len(candidates))
     box = compose_box(ranked, p["budget_max"], k)
     total = round(sum(m["price"] for m in box), 2)
     return {
@@ -224,7 +251,7 @@ def recommend(user_id: int):
         "total_price": total,
         "within_budget": p["budget_min"] <= total <= p["budget_max"],
         "min_feasible_budget": min_feasible,
-        "model": "mock (random scores)",
+        "model": source,
     }
 
 
