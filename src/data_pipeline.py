@@ -184,7 +184,6 @@ print(f"  Test interactions removed: {test_before - len(test):,} "
 inter = pd.concat([train, val, test], ignore_index=True)
 
 recipes = recipes[recipes["id"].isin(valid_recipes)]
-recipes = recipes.drop(columns=["tags_list"])
 
 n_users   = train["user_id"].nunique()
 n_recipes = recipes["id"].nunique()
