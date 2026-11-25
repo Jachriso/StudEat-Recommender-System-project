@@ -233,8 +233,9 @@ def recommend(user_id: int):
     if not candidates:
         raise HTTPException(status_code=422, detail="No meal matches these allergies and diet")
 
-    # Minimum feasible budget: k times the cheapest compatible meal.
-    min_feasible = round(k * min(m["price"] for m in candidates), 2)
+    
+    # Minimum feasible budget: price of the cheapest complete box with these constraints.
+    min_feasible = cheapest_box_cost(candidates, k)
     if p["budget_max"] < min_feasible:
         raise HTTPException(
             status_code=422,
