@@ -18,6 +18,7 @@ EXCLUDE_TAGS = {
     "breads", "cookies-and-brownies", "cakes", "pies", "candy",
     "frozen-desserts", "smoothies", "punch", "cocktails",
     "salads", "garnishes", "dips",
+    "sauces", "marinades-and-rubs", "spreads",
 }
 
 UNIT_TO_G = {
