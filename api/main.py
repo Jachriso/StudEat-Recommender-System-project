@@ -13,14 +13,15 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field, model_validator
 
-from api.mock_data import ALLERGENS, DIETS, MEALS
+from api.catalogue import ALLERGENS, DIETS, load_meals
 
 app = FastAPI(title="StudEat API", version="0.4-app-tables")
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "studeat.db"
 
+# Meal catalogue: Food.com recipes from the data pipeline (mock catalogue if not available).
+MEALS, CATALOGUE_SOURCE = load_meals(DB_PATH)
 MEAL_IDS = {m["id"] for m in MEALS}
-
 
 def _get_conn() -> sqlite3.Connection:
     """Return a SQLite connection with row_factory so rows behave like dicts."""
@@ -113,25 +114,57 @@ def predict(user_id: int, budget_min: float, budget_max: float,
     return [{**m, "score": round(random.random(), 3)} for m in candidates[:k]]
 
 
+def _copies(candidates: list[dict], k: int) -> list[dict]:
+    """Meals available for the box: each candidate once, or several times if
+    there are fewer candidates than meals to fill (repeats spread evenly)."""
+    times = max(1, -(-k // len(candidates)))  # ceil(k / number of candidates)
+    return [m for m in candidates for _ in range(times)]
+
+
+def cheapest_box_cost(candidates: list[dict], k: int) -> float:
+    """Price of the cheapest complete box of k meals (same repeat rule as compose_box)."""
+    prices = sorted(m["price"] for m in _copies(candidates, k))
+    return round(sum(prices[:k]), 2)
+
+
 def compose_box(ranked: list[dict], budget_max: float, k: int) -> list[dict]:
-    """Pick up to k meals (repeats allowed) without exceeding budget_max."""
+    """Pick k meals, best score first, without exceeding budget_max.
+
+    Before adding a meal, we check that the budget left can still pay for the
+    cheapest meals remaining for the other slots, so the box is always complete
+    when a complete box is affordable (budget_max >= cheapest_box_cost).
+    A meal is repeated only if there are fewer candidates than slots.
+    """
+    pool = _copies(ranked, k)
+    used = {}  # meal id -> times already in the box (to spread repeats)
     box, total = [], 0.0
-    pool = sorted(ranked, key=lambda m: m["score"], reverse=True)
-    i = 0
-    while len(box) < k and pool:
-        meal = pool[i % len(pool)]
-        if total + meal["price"] <= budget_max:
-            box.append(meal)
-            total += meal["price"]
-            i += 1
-        else:
-            pool.remove(meal)
+    for slot in range(k):
+        after = k - slot - 1                                # slots still to fill after this one
+        prices = sorted(m["price"] for m in pool)
+        reserve_default = sum(prices[:after])               # cheapest way to fill the other slots
+        reserve_if_cheap = sum(prices[:after + 1])          # same, if one of those cheap meals is taken now
+        choice = None
+        for meal in sorted(pool, key=lambda m: (used.get(m["id"], 0), -m["score"])):
+            # Budget kept for the other slots once this meal is in the box
+            if after and meal["price"] <= prices[after - 1]:
+                reserve = reserve_if_cheap - meal["price"]
+            else:
+                reserve = reserve_default
+            if total + meal["price"] + reserve <= budget_max + 1e-9:
+                choice = meal
+                break
+        if choice is None:
+            break
+        box.append(choice)
+        total += choice["price"]
+        pool.remove(choice)
+        used[choice["id"]] = used.get(choice["id"], 0) + 1
     return box
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "meals_in_catalogue": len(MEALS)}
+    return {"status": "ok", "meals_in_catalogue": len(MEALS), "catalogue": CATALOGUE_SOURCE}
 
 
 @app.get("/options")
@@ -173,8 +206,9 @@ def recommend(user_id: int):
     if not candidates:
         raise HTTPException(status_code=422, detail="No meal matches these allergies and diet")
 
-    # Minimum feasible budget: k times the cheapest compatible meal.
-    min_feasible = round(k * min(m["price"] for m in candidates), 2)
+    
+    # Minimum feasible budget: price of the cheapest complete box with these constraints.
+    min_feasible = cheapest_box_cost(candidates, k)
     if p["budget_max"] < min_feasible:
         raise HTTPException(
             status_code=422,

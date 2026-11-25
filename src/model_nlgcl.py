@@ -38,13 +38,14 @@ def build_norm_adj(tr_u, tr_i, n_users, n_items):
 
 class NLGCL(nn.Module):
     def __init__(self, n_users, n_items, adj, dim=64, n_layers=3,
-                 tau=0.2, lambda_cl=0.1, reg=1e-2):
+                 tau=0.2, lambda_cl=0.1, reg=1e-2, mask_dup=False):
         super().__init__()
         self.n_users = n_users
         self.n_items = n_items
         self.n_layers = n_layers
         self.tau = tau
         self.lambda_cl = lambda_cl
+        self.mask_dup = mask_dup        # ignorer les doublons du batch comme negatifs
         self.reg = reg                  # poids de la regularisation L2 des embeddings de depart
 
         self.emb = nn.Embedding(n_users + n_items, dim)
@@ -103,17 +104,26 @@ class NLGCL(nn.Module):
             i1 = F.normalize(z1[self.n_users + pos_items], p=2, dim=1)
             i2 = F.normalize(z2[self.n_users + pos_items], p=2, dim=1)
 
-            loss += self._info_nce(u1, i2)
-            loss += self._info_nce(i1, u2)
+            loss += self._info_nce(u1, i2, pos_items)   # colonnes = items du batch
+            loss += self._info_nce(i1, u2, users)       # colonnes = users du batch
             n_layers_used += 1
 
         if n_layers_used == 0:
             return torch.tensor(0.0, device=self.emb.weight.device)
         return loss / (2.0 * n_layers_used)
 
-    def _info_nce(self, z1, z2):
-        """InfoNCE entre deux vues d'un même batch, positifs = paires (i, i)."""
+    def _info_nce(self, z1, z2, col_ids=None):
+        """InfoNCE entre deux vues d'un même batch, positifs = paires (i, i).
+
+        Un item populaire apparait plusieurs fois dans un batch de 2048 : ses copies
+        seraient comptees comme des negatifs alors que c'est le meme item que le positif.
+        Avec mask_dup, on les retire du denominateur (col_ids = identifiant des colonnes).
+        """
         sim = (z1 @ z2.T) / self.tau
+        if self.mask_dup and col_ids is not None:
+            same = col_ids.unsqueeze(0) == col_ids.unsqueeze(1)          # meme id que la colonne k
+            same = same & ~torch.eye(len(col_ids), dtype=torch.bool, device=sim.device)
+            sim = sim.masked_fill(same, float("-inf"))
         # positifs sur la diagonale
         pos = torch.diag(sim)
         # logsumexp sur toute la ligne (négatifs = autres éléments du batch)
