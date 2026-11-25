@@ -12,69 +12,153 @@ Personalized weekly ready-meal box for students within a chosen budget range.
 | ML Engineer | Annabelle FAUTRAD |
 | Systems Engineer | Marie NOMO NGAH |
 
-## Project structure
+---
 
-```
-api/
-  main.py             FastAPI backend (endpoints, hard filters, placeholder predict())
-  mock_data.py        Mock meal catalogue (to be replaced by the Food.com recipes)
-app/
-  app.py              Streamlit interface (sign-up, weekly box, meal rating)
-data/
-  raw/                Raw datasets (not versioned, see "Datasets")
-  processed/          CSV outputs of the data pipeline
-  studeat.db          SQLite database (not versioned)
-src/
-  data_pipeline.py    Data pipeline: filtering, temporal split, k-core (train only), price estimation
-  pipeline_config.py  Static configuration of the pipeline
-requirements.txt
+## Quick start (from an empty folder)
+
+**Requirements:** Python 3.10 or newer, Git, and a free Kaggle account for the dataset.
+
+All commands are run from the project root.
+
+### 1. Clone the repository (once)
+
+```bash
+git clone https://github.com/Jachriso/StudEat-Recommender-System-project.git
+cd StudEat-Recommender-System-project
 ```
 
-## Datasets
+### 2. Create and activate a virtual environment (once)
 
-The raw data files are **not versioned** (too large for git). Download them manually and place them in `data/raw/` before running the pipeline.
+The virtual environment keeps the project's libraries separate from the rest of your computer.
 
-### 1 — Food.com Recipes and Interactions (Kaggle)
+```bash
+python -m venv .venv
 
-Required files: `RAW_recipes.csv` and `RAW_interactions.csv`
+# Windows Activation 
+.\.venv\Scripts\Activate.ps1
+
+# MacOS / Linux Activation 
+source .venv/bin/activate
+```
+
+### 3. Install the dependencies (once)
+
+```bash
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+> Always use `python -m pip` rather than `pip`: it installs into the active virtual environment.
+
+### 4. Download the datasets (once)
+
+The raw data files are not versioned. Put them in `data/raw/`.
+
+**Food.com Recipes and Interactions (Kaggle)** — required: `RAW_recipes.csv` and `RAW_interactions.csv`
 
 1. Go to [https://www.kaggle.com/datasets/shuyangli94/food-com-recipes-and-user-interactions](https://www.kaggle.com/datasets/shuyangli94/food-com-recipes-and-user-interactions)
 2. Click **Download** (the main button — not "selected columns")
 3. Extract the zip and copy the two CSV files into `data/raw/`
 
-### 2 — Open Food Facts Prices (data.gouv.fr)
-
-Required file: `prices.parquet`
+**Open Food Facts Prices (optional)** — `prices.parquet`. Without it, the pipeline uses a static price table.
 
 ```bash
+# macOS / Linux
 curl -L "https://www.data.gouv.fr/api/1/datasets/r/49716ed5-aacf-4692-8b2d-3cc6d15bf1d1" -o data/raw/prices.parquet
+
+# Windows PowerShell (note: curl.exe, not curl)
+curl.exe -L "https://www.data.gouv.fr/api/1/datasets/r/49716ed5-aacf-4692-8b2d-3cc6d15bf1d1" -o data/raw/prices.parquet
 ```
 
-Or download manually from the URL above and save as `data/raw/prices.parquet`.
-
-### 3 — Run the pipeline
+### 5. Run the data pipeline (once)
 
 ```bash
-pip install pandas numpy pyarrow
 python src/data_pipeline.py
 ```
 
-Output: `data/studeat.db` (SQLite) and CSVs in `data/processed/`.
+Steps: recipe filtering, deduplication, temporal split 70/15/15, k-core filtering on the training split only, price estimation.
+Outputs: `data/studeat.db` (SQLite, with the recipe catalogue used by the API) and `data/processed/{recipes,interactions,train,val,test}.csv`.
+
+### 6. Run the app
+
+The trained model is provided in the repository (`models/embeddings.npz`), so **no training is needed** to run the app.
+
+Open **two terminals** and activate the virtual environment in each of them.
+
+```bash
+# Terminal 1 — API: http://localhost:8000/docs
+python -m uvicorn api.main:app --reload
+
+# Terminal 2 — interface: http://localhost:8501
+python -m streamlit run app/app.py
+```
 
 ---
 
-## Run locally
+## Retrain the model (optional)
 
-From the project root:
+Not needed to run the app. Requires steps 1 to 5. Training runs on CPU (about 30–50 s per epoch for NLGCL), with early stopping on validation NDCG@10.
 
 ```bash
-python -m pip install -r requirements.txt
+# Quick check that the model runs (synthetic data, a few seconds)
+python src/test_forward.py
 
-# Terminal 1: API on http://localhost:8000 (interactive docs: http://localhost:8000/docs)
-python -m uvicorn api.main:app --reload
+# Train NLGCL (hyperparameters in configs/nlgcl.json)
+python src/train.py --config configs/nlgcl.json
 
-# Terminal 2: interface on http://localhost:8501
-python -m streamlit run app/app.py
+# Ablation: same model without the contrastive loss (= LightGCN)
+python src/train.py --config configs/lightgcn.json
+
+# Loss curves from the training history
+python src/plot_history.py models/nlgcl_history.csv
+
+# Baselines (Random, Most-Popular) with the same evaluation protocol
+python src/baselines.py
+
+# Results by user-activity level
+python src/eval_by_activity.py --ckpt models/nlgcl.pt
+
+# Export the embeddings used by the API (replaces models/embeddings.npz)
+python src/export_embeddings.py --ckpt models/nlgcl.pt
+```
+
+Each run writes to `models/`: the checkpoint (`.pt`), the per-epoch history (`_history.csv`) and the results (`_results.json`). These files are not versioned; only `models/embeddings.npz` is. Command-line options override the config file, e.g. `--epochs 10`.
+
+---
+
+## Project structure
+
+```
+api/
+  main.py               FastAPI backend (endpoints, hard filters, placeholder predict())
+  mock_data.py          Mock meal catalogue (fallback when the pipeline has not been run)
+app/
+  app.py                Streamlit interface (sign-up, weekly box, meal rating)
+configs/
+  nlgcl.json            Hyperparameters of NLGCL
+  lightgcn.json         Same configuration without the contrastive loss
+data/
+  raw/                  Raw datasets (not versioned, see "Datasets")
+  processed/            CSV outputs of the data pipeline (not versioned)
+  studeat.db            SQLite database (not versioned)
+models/
+  embeddings.npz        Trained embeddings used by the API (versioned)
+                        Checkpoints and histories (not versioned)
+reports/figures/        Figures used in the reports
+src/
+  data_pipeline.py      Data pipeline
+  pipeline_config.py    Static configuration of the pipeline
+  model_nlgcl.py        NLGCL / LightGCN model
+  train.py              Training and evaluation (NDCG@10, Recall@20)
+  test_forward.py       Quick model check on synthetic data
+  plot_history.py       Training curves
+  baselines.py          Random and Most-Popular baselines
+  eval_popularity.py    Popularity baseline (MLE-Core version)
+  eval_by_activity.py   Results by user-activity level
+  export_embeddings.py  Export of the trained embeddings
+  recommender.py        Recommender used by the API (popularity fallback for new students)
+  seed_test_data.py     Synthetic test students and ratings
+requirements.txt
 ```
 
 ## API endpoints
@@ -102,21 +186,20 @@ These tables are kept separate from the Food.com tables (`recipes`, `interaction
 
 ## Test data (end-to-end testing)
 
-To test the full chain without waiting for a real rating campaign, inject synthetic student profiles and ratings:
+To test the full chain without a real rating campaign, insert synthetic students and ratings:
 
 ```bash
-# Insert 8 test users (all diets/allergens covered) and 69 ratings
+# Insert 8 test students (all diets/allergens covered) and 69 ratings
 python src/seed_test_data.py
 
-# Then test the recommendation endpoint
-# GET http://localhost:8000/recommend/1   → TEST_Alice (vegetarian, gluten-free)
-# GET http://localhost:8000/recommend/2   → TEST_Bob   (no restrictions)
+# Then call GET http://localhost:8000/recommend/{user_id}
+# with the user_id printed by the script (e.g. TEST_Alice: vegetarian, gluten-free)
 
 # Remove all test data when done
 python src/seed_test_data.py --clean
 ```
 
-Test users are prefixed with `TEST_` so they are easy to identify and clean up.
+Test students are prefixed with `TEST_`. These ratings are synthetic: they must not be used for training or reported as real results.
 
 ## Model interface (agreed with MLE-Core / MLE-Ops)
 
@@ -125,3 +208,17 @@ predict(user_id, budget_min, budget_max, allergies, diet, k=10) -> list[dict]  #
 ```
 
 Hard filters (allergies, diet) and budget checks are applied by rules in the API; the model only ranks the remaining meals.
+
+---
+
+## Troubleshooting
+
+| Problem | Solution |
+|---|---|
+| Windows: `.venv\Scripts\Activate.ps1` "cannot load module" | Add `.\` in front: `.\.venv\Scripts\Activate.ps1` |
+| Windows: "running scripts is disabled on this system" | Run once: `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` |
+| Windows: `pip.exe` blocked by an application control policy | Use `python -m pip ...` instead of `pip ...` |
+| `pip` tries to compile numpy and fails ("Unknown compiler") | Your Python version is not supported by a dependency: use Python 3.12 (`py -3.12 -m venv .venv` on Windows) |
+| Pipeline: `pyarrow` DLL blocked (Windows Smart App Control) | `python -m pip install fastparquet`, or remove `data/raw/prices.parquet` to use the static prices |
+| Streamlit: "API not reachable" | Start the API first (Terminal 1), with the virtual environment activated |
+| The app shows only 30 meals | The pipeline has not been run: the API falls back to the mock catalogue (step 5) |
