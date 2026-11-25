@@ -2,6 +2,8 @@
 Static configuration data for the StudEat data pipeline.
 """
 
+import re
+
 # Tags a recipe must have at least one of to be kept (main dishes only).
 TARGET_TAGS = {
     "main-dish", "one-dish-meal",
@@ -12,6 +14,22 @@ TARGET_TAGS = {
 # Tags that disqualify a recipe even if it matches TARGET_TAGS.
 # "oven" and "pasta-rice-and-grains" were too broad and caught desserts/sides,
 # so they were removed from TARGET_TAGS and non-mains are excluded explicitly.
+# Recipe names containing these words are excluded regardless of their tags.
+# Catches miscategorized recipes (e.g. "Southern BBQ Sauce" tagged main-dish).
+NAME_EXCLUDE_KEYWORDS = {
+    "sauce", "dressing", "marinade", "rub", "dip", "spread",
+    "glaze", "gravy", "syrup", "jam", "jelly", "relish",
+    "chutney", "pickle", "vinaigrette", "condiment",
+}
+
+# Compiled patterns for name-based filtering (see STEP 1 in data_pipeline.py).
+# Excludes a recipe only when the name ENDS with a keyword (whole word) and
+# has no connector word — avoids false positives like "glazed meatloaf" or
+# "jambalaya" (contains "jam") or "linguine with pesto cream sauce".
+_kw_pattern = "|".join(NAME_EXCLUDE_KEYWORDS)
+NAME_END_RE   = re.compile(r"\b(?:" + _kw_pattern + r")s?$")
+DISH_WORDS_RE = re.compile(r"\b(?:with|w|in|over|on|and|served)\b")
+
 EXCLUDE_TAGS = {
     "desserts", "side-dishes", "snacks", "appetizers",
     "beverages", "condiments-etc", "breakfast", "brunch",

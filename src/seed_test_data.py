@@ -19,17 +19,8 @@ from pathlib import Path
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "studeat.db"
 
-# ── Meal IDs from mock_data.py (IDs 1-30) ────────────────────────────────────
-ALL_MEAL_IDS = list(range(1, 31))
-
-# Meals that fit each diet (subset used for realistic ratings)
-MEALS_BY_DIET = {
-    "none":          list(range(1, 31)),
-    "vegetarian":    [2, 5, 8, 10, 12, 14, 16, 18, 20, 23, 25, 28, 30],
-    "vegan":         [2, 10, 12, 14, 18, 20, 28],
-    "halal":         [1, 2, 4, 5, 8, 9, 10, 11, 12, 13, 14, 16, 18, 20, 21, 24, 27, 28, 29, 30],
-    "pescatarian":   [2, 5, 6, 8, 10, 12, 14, 16, 17, 18, 20, 22, 23, 25, 26, 28, 30],
-}
+# Ratings distribution skewed toward positive values (mirrors real Food.com data)
+_RATING_WEIGHTS = [3, 3, 4, 4, 4, 5, 5]
 
 # ── Test profiles ─────────────────────────────────────────────────────────────
 TEST_USERS = [
@@ -40,7 +31,7 @@ TEST_USERS = [
         "budget_min": 30.0,
         "budget_max": 50.0,
         "meals_per_week": 7,
-        "ratings": {2: 5, 10: 4, 18: 5, 20: 4, 28: 3, 14: 5, 12: 4},
+        "n_ratings": 7,
     },
     {
         "name": "TEST_Bob",
@@ -49,7 +40,7 @@ TEST_USERS = [
         "budget_min": 40.0,
         "budget_max": 60.0,
         "meals_per_week": 10,
-        "ratings": {1: 5, 3: 4, 7: 5, 11: 3, 19: 5, 24: 4, 27: 2, 9: 4, 15: 3, 6: 5},
+        "n_ratings": 10,
     },
     {
         "name": "TEST_Camille",
@@ -58,7 +49,7 @@ TEST_USERS = [
         "budget_min": 25.0,
         "budget_max": 40.0,
         "meals_per_week": 7,
-        "ratings": {2: 4, 10: 5, 14: 5, 18: 4, 20: 5},
+        "n_ratings": 5,
     },
     {
         "name": "TEST_Dylan",
@@ -67,7 +58,7 @@ TEST_USERS = [
         "budget_min": 35.0,
         "budget_max": 55.0,
         "meals_per_week": 10,
-        "ratings": {1: 4, 2: 3, 9: 5, 13: 4, 21: 5, 24: 5, 29: 3, 11: 4, 14: 2, 18: 4},
+        "n_ratings": 10,
     },
     {
         "name": "TEST_Emma",
@@ -76,7 +67,7 @@ TEST_USERS = [
         "budget_min": 45.0,
         "budget_max": 70.0,
         "meals_per_week": 10,
-        "ratings": {6: 5, 17: 3, 22: 4, 26: 5, 2: 4, 10: 3, 16: 4, 20: 5, 28: 4, 18: 5},
+        "n_ratings": 10,
     },
     {
         "name": "TEST_Felix",
@@ -85,7 +76,7 @@ TEST_USERS = [
         "budget_min": 30.0,
         "budget_max": 45.0,
         "meals_per_week": 7,
-        "ratings": {1: 3, 2: 4, 15: 5, 16: 4, 18: 5, 19: 4, 20: 3},
+        "n_ratings": 7,
     },
     {
         "name": "TEST_Grace",
@@ -94,7 +85,7 @@ TEST_USERS = [
         "budget_min": 35.0,
         "budget_max": 60.0,
         "meals_per_week": 10,
-        "ratings": {2: 5, 5: 4, 8: 3, 10: 5, 12: 4, 14: 5, 16: 5, 18: 4, 20: 3, 30: 4},
+        "n_ratings": 10,
     },
     {
         "name": "TEST_Hugo",
@@ -103,7 +94,7 @@ TEST_USERS = [
         "budget_min": 40.0,
         "budget_max": 65.0,
         "meals_per_week": 10,
-        "ratings": {1: 4, 2: 5, 14: 4, 18: 5, 19: 3, 20: 4, 21: 5, 24: 4, 28: 3, 29: 5},
+        "n_ratings": 10,
     },
 ]
 
@@ -112,6 +103,36 @@ def _get_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _get_recipe_pool() -> list[dict]:
+    """Return [{id, diets, allergens}] for every recipe in the DB."""
+    import ast
+    import sys
+    sys.path.insert(0, str(DB_PATH.parent.parent))
+    from api.catalogue import detect_allergens, detect_diets
+
+    try:
+        with _get_conn() as conn:
+            rows = conn.execute("SELECT id, name, ingredients FROM recipes").fetchall()
+    except Exception:
+        rows = []
+    if not rows:
+        raise RuntimeError(
+            "No recipes found in studeat.db. Run the data pipeline first:\n"
+            "    python src/data_pipeline.py"
+        )
+    pool = []
+    for row in rows:
+        try:
+            ingredients = ast.literal_eval(row["ingredients"])
+            text = (" | ".join(ingredients) + " | " + row["name"]).lower()
+        except Exception:
+            text = row["name"].lower()
+        allergens = detect_allergens(text)
+        diets = detect_diets(text, allergens)
+        pool.append({"id": row["id"], "diets": diets, "allergens": set(allergens)})
+    return pool
 
 
 def _ensure_tables() -> None:
@@ -156,7 +177,9 @@ def clean_test_data() -> None:
 
 def seed() -> None:
     """Insert test users and ratings, skipping users that already exist."""
+    random.seed(42)
     _ensure_tables()
+    pool = _get_recipe_pool()
 
     with _get_conn() as conn:
         existing = {
@@ -193,7 +216,14 @@ def seed() -> None:
             user_id = cur.lastrowid
             inserted_users += 1
 
-            for meal_id, rating in user["ratings"].items():
+            user_allergens = set(user["allergies"])
+            compatible = [
+                r["id"] for r in pool
+                if user["diet"] in r["diets"] and not (user_allergens & r["allergens"])
+            ]
+            sampled_ids = random.sample(compatible, min(user["n_ratings"], len(compatible)))
+            for meal_id in sampled_ids:
+                rating = random.choice(_RATING_WEIGHTS)
                 ts = now - timedelta(
                     days=random.randint(0, 20),
                     hours=random.randint(0, 23),
@@ -206,7 +236,7 @@ def seed() -> None:
                 inserted_ratings += 1
 
             print(f"  inserted: {user['name']} (user_id={user_id}, "
-                  f"{len(user['ratings'])} ratings, diet={user['diet']})")
+                  f"{len(sampled_ids)} ratings, diet={user['diet']})")
 
     print(f"\nDone: {inserted_users} users, {inserted_ratings} ratings added.")
 

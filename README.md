@@ -76,7 +76,7 @@ curl.exe -L "https://www.data.gouv.fr/api/1/datasets/r/49716ed5-aacf-4692-8b2d-3
 python src/data_pipeline.py
 ```
 
-Steps: recipe filtering, deduplication, temporal split 70/15/15, k-core filtering on the training split only, price estimation.
+Steps: recipe filtering, temporal split 70/15/15, deduplication by name (train scores only), k-core filtering on the training split only, price estimation.
 Outputs: `data/studeat.db` (SQLite, with the recipe catalogue used by the API) and `data/processed/{recipes,interactions,train,val,test}.csv`.
 
 ### 6. Run the app

@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from pipeline_config import UNIT_TO_G, CATEGORY_TAG_MAP, STATIC_FALLBACK, TARGET_TAGS, EXCLUDE_TAGS
+from pipeline_config import UNIT_TO_G, CATEGORY_TAG_MAP, STATIC_FALLBACK, TARGET_TAGS, EXCLUDE_TAGS, NAME_END_RE, DISH_WORDS_RE
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 ROOT      = Path(__file__).resolve().parent.parent
@@ -46,6 +46,11 @@ mask_include = recipes["tags_list"].apply(lambda t: bool(set(t) & TARGET_TAGS))
 mask_exclude = recipes["tags_list"].apply(lambda t: bool(set(t) & EXCLUDE_TAGS))
 recipes = recipes[mask_include & ~mask_exclude].copy()
 print(f"  After tag filter: {len(recipes):,} recipes")
+
+names = recipes["name"].fillna("").str.lower().str.split().str.join(" ")
+mask_name = ~(names.str.contains(NAME_END_RE) & ~names.str.contains(DISH_WORDS_RE))
+recipes = recipes[mask_name].copy()
+print(f"  After name filter: {len(recipes):,} recipes")
 recipes = recipes.drop(columns=["tags_list"])
 
 
@@ -87,12 +92,34 @@ print(f"  After recipe-tag filter: {len(inter):,}")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-# 4. Deduplicate recipes by name (Bayesian average score)
+# 4. Temporal split 70 / 15 / 15  (BEFORE dedup and k-core to prevent leakage)
 # ═════════════════════════════════════════════════════════════════════════════
-print("\nSTEP 4 — Deduplicate by name")
+print("\nSTEP 4 — Temporal split 70/15/15")
+
+inter_sorted = inter.sort_values("date").reset_index(drop=True)
+n         = len(inter_sorted)
+train_end = int(n * 0.70)
+val_end   = int(n * 0.85)
+
+train = inter_sorted.iloc[:train_end].copy()
+val   = inter_sorted.iloc[train_end:val_end].copy()
+test  = inter_sorted.iloc[val_end:].copy()
+
+print(f"  Train: {len(train):,} | Val: {len(val):,} | Test: {len(test):,}")
+print(f"  Train period : {train['date'].min().date()} → {train['date'].max().date()}")
+print(f"  Val period   : {val['date'].min().date()} → {val['date'].max().date()}")
+print(f"  Test period  : {test['date'].min().date()} → {test['date'].max().date()}")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 5. Deduplicate recipes by name using TRAIN scores only
+#    Done after the split so val/test ratings never influence which duplicate
+#    is kept — using all interactions here would be a form of data leakage.
+# ═════════════════════════════════════════════════════════════════════════════
+print("\nSTEP 5 — Deduplicate by name (train scores only)")
 
 rating_stats = (
-    inter.groupby("recipe_id")["rating"]
+    train.groupby("recipe_id")["rating"]
     .agg(avg_rating="mean", n_ratings="count")
     .reset_index()
     .rename(columns={"recipe_id": "id"})
@@ -115,28 +142,12 @@ recipes = recipes.drop(columns=["avg_rating", "n_ratings", "_score"])
 print(f"  After name deduplication: {len(recipes):,} recipes")
 
 valid_ids = set(recipes["id"])
-inter = inter[inter["recipe_id"].isin(valid_ids)]
-print(f"  Interactions after dedup: {len(inter):,}")
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# 5. Temporal split 70 / 15 / 15  (BEFORE k-core to prevent leakage)
-# ═════════════════════════════════════════════════════════════════════════════
-print("\nSTEP 5 — Temporal split 70/15/15")
-
-inter_sorted = inter.sort_values("date").reset_index(drop=True)
-n         = len(inter_sorted)
-train_end = int(n * 0.70)
-val_end   = int(n * 0.85)
-
-train = inter_sorted.iloc[:train_end].copy()
-val   = inter_sorted.iloc[train_end:val_end].copy()
-test  = inter_sorted.iloc[val_end:].copy()
-
-print(f"  Train: {len(train):,} | Val: {len(val):,} | Test: {len(test):,}")
-print(f"  Train period : {train['date'].min().date()} → {train['date'].max().date()}")
-print(f"  Val period   : {val['date'].min().date()} → {val['date'].max().date()}")
-print(f"  Test period  : {test['date'].min().date()} → {test['date'].max().date()}")
+train = train[train["recipe_id"].isin(valid_ids)]
+val   = val[val["recipe_id"].isin(valid_ids)]
+test  = test[test["recipe_id"].isin(valid_ids)]
+print(f"  Train interactions after dedup: {len(train):,}")
+print(f"  Val  interactions after dedup: {len(val):,}")
+print(f"  Test interactions after dedup: {len(test):,}")
 
 
 # ═════════════════════════════════════════════════════════════════════════════
