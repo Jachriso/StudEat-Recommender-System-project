@@ -2,6 +2,8 @@
 Static configuration data for the StudEat data pipeline.
 """
 
+import re
+
 # Tags a recipe must have at least one of to be kept (main dishes only).
 TARGET_TAGS = {
     "main-dish", "one-dish-meal",
@@ -19,6 +21,14 @@ NAME_EXCLUDE_KEYWORDS = {
     "glaze", "gravy", "syrup", "jam", "jelly", "relish",
     "chutney", "pickle", "vinaigrette", "condiment",
 }
+
+# Compiled patterns for name-based filtering (see STEP 1 in data_pipeline.py).
+# Excludes a recipe only when the name ENDS with a keyword (whole word) and
+# has no connector word — avoids false positives like "glazed meatloaf" or
+# "jambalaya" (contains "jam") or "linguine with pesto cream sauce".
+_kw_pattern = "|".join(NAME_EXCLUDE_KEYWORDS)
+NAME_END_RE   = re.compile(r"\b(?:" + _kw_pattern + r")s?$")
+DISH_WORDS_RE = re.compile(r"\b(?:with|w|in|over|on|and|served)\b")
 
 EXCLUDE_TAGS = {
     "desserts", "side-dishes", "snacks", "appetizers",

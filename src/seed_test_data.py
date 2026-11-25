@@ -105,20 +105,34 @@ def _get_conn() -> sqlite3.Connection:
     return conn
 
 
-def _get_recipe_ids() -> list[int]:
-    """Return all recipe IDs from the pipeline-generated recipes table."""
+def _get_recipe_pool() -> list[dict]:
+    """Return [{id, diets, allergens}] for every recipe in the DB."""
+    import ast
+    import sys
+    sys.path.insert(0, str(DB_PATH.parent.parent))
+    from api.catalogue import detect_allergens, detect_diets
+
     try:
         with _get_conn() as conn:
-            rows = conn.execute("SELECT id FROM recipes").fetchall()
-        ids = [r["id"] for r in rows]
+            rows = conn.execute("SELECT id, name, ingredients FROM recipes").fetchall()
     except Exception:
-        ids = []
-    if not ids:
+        rows = []
+    if not rows:
         raise RuntimeError(
             "No recipes found in studeat.db. Run the data pipeline first:\n"
             "    python src/data_pipeline.py"
         )
-    return ids
+    pool = []
+    for row in rows:
+        try:
+            ingredients = ast.literal_eval(row["ingredients"])
+            text = (" | ".join(ingredients) + " | " + row["name"]).lower()
+        except Exception:
+            text = row["name"].lower()
+        allergens = detect_allergens(text)
+        diets = detect_diets(text, allergens)
+        pool.append({"id": row["id"], "diets": diets, "allergens": set(allergens)})
+    return pool
 
 
 def _ensure_tables() -> None:
@@ -163,8 +177,9 @@ def clean_test_data() -> None:
 
 def seed() -> None:
     """Insert test users and ratings, skipping users that already exist."""
+    random.seed(42)
     _ensure_tables()
-    recipe_ids = _get_recipe_ids()
+    pool = _get_recipe_pool()
 
     with _get_conn() as conn:
         existing = {
@@ -201,7 +216,12 @@ def seed() -> None:
             user_id = cur.lastrowid
             inserted_users += 1
 
-            sampled_ids = random.sample(recipe_ids, min(user["n_ratings"], len(recipe_ids)))
+            user_allergens = set(user["allergies"])
+            compatible = [
+                r["id"] for r in pool
+                if user["diet"] in r["diets"] and not (user_allergens & r["allergens"])
+            ]
+            sampled_ids = random.sample(compatible, min(user["n_ratings"], len(compatible)))
             for meal_id in sampled_ids:
                 rating = random.choice(_RATING_WEIGHTS)
                 ts = now - timedelta(
