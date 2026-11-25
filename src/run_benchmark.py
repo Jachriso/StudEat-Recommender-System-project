@@ -53,10 +53,13 @@ def parse_models(pairs):
     return models
 
 
-def train(config, seed, out, epochs):
-    """Train one model with src/train.py (same Python, so the same virtual environment)."""
+def train(config, seed, out, epochs, data_dir):
+    """Train one model with src/train.py (same Python, so the same virtual environment).
+
+    data_dir is forwarded so that training and evaluation always read the same split.
+    """
     cmd = [sys.executable, os.path.join(SRC_DIR, "train.py"),
-           "--config", config, "--seed", str(seed), "--out", out]
+           "--config", config, "--seed", str(seed), "--out", out, "--data-dir", data_dir]
     if epochs is not None:
         cmd += ["--epochs", str(epochs)]
     print("\n$ " + " ".join(cmd), flush=True)
@@ -120,7 +123,7 @@ def main():
     if not a.skip_train:
         for name, config in models.items():
             for seed, out in zip(a.seeds, ckpts[name]):
-                train(config, seed, out, a.epochs)
+                train(config, seed, out, a.epochs, a.data_dir)
 
     # --- 2. evaluation with the shared harness ---------------------------------
     d = load_splits(a.data_dir)
