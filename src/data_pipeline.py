@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from pipeline_config import UNIT_TO_G, CATEGORY_TAG_MAP, STATIC_FALLBACK
+from pipeline_config import UNIT_TO_G, CATEGORY_TAG_MAP, STATIC_FALLBACK, TARGET_TAGS, EXCLUDE_TAGS
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 ROOT      = Path(__file__).resolve().parent.parent
@@ -41,16 +41,12 @@ print(f"  Raw recipes: {len(recipes_raw):,}")
 
 recipes = recipes_raw[["id", "name", "description", "tags", "nutrition", "ingredients"]].copy()
 
-TARGET_TAGS = {
-    "main-dish", "one-dish-meal", "stews", "casseroles",
-    "pasta-rice-and-grains", "chicken", "beef", "pork",
-    "soups-stews", "curries", "oven",
-}
-
 recipes["tags_list"] = recipes["tags"].apply(parse_list)
-mask = recipes["tags_list"].apply(lambda t: bool(set(t) & TARGET_TAGS))
-recipes = recipes[mask].copy()
+mask_include = recipes["tags_list"].apply(lambda t: bool(set(t) & TARGET_TAGS))
+mask_exclude = recipes["tags_list"].apply(lambda t: bool(set(t) & EXCLUDE_TAGS))
+recipes = recipes[mask_include & ~mask_exclude].copy()
 print(f"  After tag filter: {len(recipes):,} recipes")
+recipes = recipes.drop(columns=["tags_list"])
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -68,7 +64,7 @@ def parse_nutrition(s):
     return dict(zip(NUTR_COLS, vals)) if len(vals) == 7 else dict.fromkeys(NUTR_COLS)
 
 nutr_df = recipes["nutrition"].apply(parse_nutrition).apply(pd.Series)
-recipes = pd.concat([recipes.drop(columns=["nutrition", "tags"]), nutr_df], axis=1)
+recipes = pd.concat([recipes.drop(columns=["nutrition"]), nutr_df], axis=1)
 print(f"  Nutrition columns added: {NUTR_COLS}")
 
 
@@ -188,7 +184,6 @@ print(f"  Test interactions removed: {test_before - len(test):,} "
 inter = pd.concat([train, val, test], ignore_index=True)
 
 recipes = recipes[recipes["id"].isin(valid_recipes)]
-recipes = recipes.drop(columns=["tags_list"])
 
 n_users   = train["user_id"].nunique()
 n_recipes = recipes["id"].nunique()

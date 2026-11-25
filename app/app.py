@@ -24,7 +24,7 @@ def api_get(path):
 # --- API status -------------------------------------------------------------
 try:
     health = api_get("/health").json()
-    st.sidebar.success(f"API connected ({health['meals_in_catalogue']} meals)")
+    st.sidebar.success(f"API connected ({health['meals_in_catalogue']} meals, catalogue: {health.get('catalogue', 'mock')})")
     options = api_get("/options").json()
 except requests.exceptions.RequestException:
     st.sidebar.error(f"API not reachable at {API_URL}. Start it with: python -m uvicorn api.main:app --reload")
@@ -40,7 +40,11 @@ with tab_signup:
     with st.form("profile"):
         name = st.text_input("First name")
         diet = st.selectbox("Diet", options["diets"])
-        allergies = st.multiselect("Allergies", options["allergens"])
+        allergies = st.multiselect(
+            "Allergies", options["allergens"],
+            format_func=lambda a: "tree nuts" if a == "nuts" else a,
+            help="Peanuts are not tree nuts: if you are allergic to both, tick both.",
+        )
         budget = st.slider("Weekly budget (EUR)", 20, 80, (35, 50))
         meals = st.number_input("Meals per week", min_value=1, max_value=14, value=10)
         submitted = st.form_submit_button("Create my profile")
@@ -86,10 +90,13 @@ with tab_box:
                 if not data["within_budget"]:
                     st.warning("This box is below your minimum budget.")
 
-                df = pd.DataFrame(data["meals"])[["name", "cuisine", "price", "allergens"]]
+                df = pd.DataFrame(data["meals"])
+                columns = {"name": "Meal", "calories": "Calories", "cuisine": "Cuisine",
+                           "price": "Price", "allergens": "Allergens"}
+                df = df[[c for c in columns if c in df.columns]]
                 df["allergens"] = df["allergens"].apply(lambda a: ", ".join(a) if a else "-")
                 df["price"] = df["price"].map(lambda p: f"{p:.2f} €")
-                df.columns = ["Meal", "Cuisine", "Price", "Allergens"]
+                df = df.rename(columns=columns)
                 st.dataframe(df, hide_index=True)
                 st.caption(f"Recommendations: {data['model']}")
 
