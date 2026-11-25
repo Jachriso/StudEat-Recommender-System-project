@@ -115,6 +115,9 @@ python src/plot_history.py models/nlgcl_history.csv
 # Baselines (Random, Most-Popular) with the shared evaluation harness
 python src/run_baselines.py
 
+# Final benchmark: every model over 3 seeds + baselines, with the shared harness
+# (writes reports/results_final.md; about 30 to 60 min on CPU, with early stopping)
+python src/run_benchmark.py
 # Optional training options (off by default; they did not help in our tuning)
 #   --mask-dup     mask duplicate ids as false negatives in the InfoNCE loss
 #   --neg-alpha A  sample negatives proportionally to popularity^A (0 = uniform)
@@ -162,6 +165,7 @@ src/
   plot_history.py       Training curves
   evaluation.py         Shared evaluation harness (NDCG@10, Recall@20) used for all models
   run_baselines.py      Random and Most-Popular baselines with the shared harness
+  run_benchmark.py      Final benchmark: all models over 3 seeds, one results table
   baselines.py          Random and Most-Popular baselines (MLE-Ops version)
   eval_popularity.py    Popularity baseline (MLE-Core version)
   eval_by_activity.py   Results by user-activity level
