@@ -112,8 +112,8 @@ python src/train.py --config configs/lightgcn.json
 # Loss curves from the training history
 python src/plot_history.py models/nlgcl_history.csv
 
-# Baselines (Random, Most-Popular) with the same evaluation protocol
-python src/baselines.py
+# Baselines (Random, Most-Popular) with the shared evaluation harness
+python src/run_baselines.py
 
 # Results by user-activity level
 python src/eval_by_activity.py --ckpt models/nlgcl.pt
@@ -152,7 +152,9 @@ src/
   train.py              Training and evaluation (NDCG@10, Recall@20)
   test_forward.py       Quick model check on synthetic data
   plot_history.py       Training curves
-  baselines.py          Random and Most-Popular baselines
+  evaluation.py         Shared evaluation harness (NDCG@10, Recall@20) used for all models
+  run_baselines.py      Random and Most-Popular baselines with the shared harness
+  baselines.py          Random and Most-Popular baselines (MLE-Ops version)
   eval_popularity.py    Popularity baseline (MLE-Core version)
   eval_by_activity.py   Results by user-activity level
   export_embeddings.py  Export of the trained embeddings
