@@ -2,6 +2,24 @@
 Static configuration data for the StudEat data pipeline.
 """
 
+# Tags a recipe must have at least one of to be kept (main dishes only).
+TARGET_TAGS = {
+    "main-dish", "one-dish-meal",
+    "stews", "casseroles", "soups-stews", "curries",
+    "chicken", "beef", "pork",
+}
+
+# Tags that disqualify a recipe even if it matches TARGET_TAGS.
+# "oven" and "pasta-rice-and-grains" were too broad and caught desserts/sides,
+# so they were removed from TARGET_TAGS and non-mains are excluded explicitly.
+EXCLUDE_TAGS = {
+    "desserts", "side-dishes", "snacks", "appetizers",
+    "beverages", "condiments-etc", "breakfast", "brunch",
+    "breads", "cookies-and-brownies", "cakes", "pies", "candy",
+    "frozen-desserts", "smoothies", "punch", "cocktails",
+    "salads", "garnishes", "dips",
+}
+
 UNIT_TO_G = {
     "kg": 1000, "g": 1,
     "lb": 453,  "lbs": 453, "pound": 453, "pounds": 453,
