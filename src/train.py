@@ -62,8 +62,19 @@ def to_csr(u, i, n_users, n_items):
 # Echantillonnage des negatifs (item non vu par l'utilisateur dans le train)
 # ----------------------------------------------------------------------------
 class NegSampler:
-    def __init__(self, tr_u, tr_i, n_items, seed=0):
+    """Negatifs = items jamais vus par l'user dans le train.
+
+    alpha = 0 : tirage uniforme (comportement d'origine).
+    alpha > 0 : probabilite proportionnelle a popularite**alpha. Les negatifs sont alors
+    des items populaires que l'user n'a PAS aimes : le modele ne peut plus gagner juste
+    en repetant "les populaires sont bons", il doit apprendre ce qui est propre a l'user.
+    """
+    def __init__(self, tr_u, tr_i, n_items, seed=0, alpha=0.0):
         self.n_items = n_items
+        self.p = None
+        if alpha > 0:
+            w = np.bincount(tr_i, minlength=n_items).astype(np.float64) ** alpha
+            self.p = w / w.sum()
         self.keys = np.sort(tr_u.astype(np.int64) * n_items + tr_i)
         self.rng = np.random.default_rng(seed)
 
@@ -72,13 +83,18 @@ class NegSampler:
         pos[pos == len(self.keys)] = len(self.keys) - 1
         return self.keys[pos] == keys
 
+    def _draw(self, n):
+        if self.p is None:
+            return self.rng.integers(0, self.n_items, n)
+        return self.rng.choice(self.n_items, size=n, p=self.p)
+
     def sample(self, users):
-        neg = self.rng.integers(0, self.n_items, len(users))
+        neg = self._draw(len(users))
         for _ in range(5):                      # quelques re-tirages suffisent
             bad = self._seen(users.astype(np.int64) * self.n_items + neg)
             if not bad.any():
                 break
-            neg[bad] = self.rng.integers(0, self.n_items, int(bad.sum()))
+            neg[bad] = self._draw(int(bad.sum()))
         return neg
 
 
@@ -160,6 +176,10 @@ def main():
                    help="arret si NDCG@10 val ne s'ameliore pas pendant N evaluations")
     p.add_argument("--out", default="models/nlgcl.pt")
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--neg-alpha", type=float, default=0.0,
+                   help="negatifs ~ popularite**alpha (0 = uniforme ; essayer 0.5 ou 0.75)")
+    p.add_argument("--mask-dup", action="store_true",
+                   help="contrastif : ne pas traiter les doublons du batch comme des negatifs")
     p.add_argument("--config", default=None, help="fichier JSON d'hyperparametres")
 
     pre, _ = p.parse_known_args()
@@ -205,9 +225,10 @@ def main():
     # --- 2. modele ----------------------------------------------------------
     adj = build_norm_adj(tr_u, tr_i, n_users, n_items)
     model = NLGCL(n_users, n_items, adj, dim=args.dim, n_layers=args.layers,
-                  tau=args.tau, lambda_cl=lam).to(device)
+                  tau=args.tau, lambda_cl=lam,
+                  mask_dup=args.mask_dup).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=args.lr)
-    sampler = NegSampler(tr_u, tr_i, n_items, seed=args.seed)
+    sampler = NegSampler(tr_u, tr_i, n_items, seed=args.seed, alpha=args.neg_alpha)
     val_sampler = NegSampler(tr_u, tr_i, n_items, seed=args.seed + 1)
 
     # --- 3. entrainement ----------------------------------------------------
