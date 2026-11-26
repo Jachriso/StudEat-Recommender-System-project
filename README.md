@@ -126,8 +126,8 @@ python src/train.py --config configs/nlgcl.json --lambda-cl 0.01 --neg-alpha 0.5
 # Blend of the model score with item popularity (weight w chosen on validation, test read once)
 python src/eval_blend.py --ckpt models/nlgcl_s0.pt models/nlgcl_s1.pt models/nlgcl_s2.pt
 
-# Cosine + popularity score (used for the fold-in in the API; weight chosen with the overlap with the popularity box)
-python src/eval_cosine.py --ckpt models/nlgcl_s0.pt models/nlgcl_s1.pt models/nlgcl_s2.pt
+# Cosine + popularity score on fold-in vectors (API); w is chosen on validation (best NDCG@10, or a product choice read on the validation table), test is read once
+python src/eval_cosine.py --ckpt models/benchmark/nlgcl_s0.pt models/benchmark/nlgcl_s1.pt models/benchmark/nlgcl_s2.pt
 
 # Results by user-activity level
 python src/eval_by_activity.py --ckpt models/nlgcl.pt
