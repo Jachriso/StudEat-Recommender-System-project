@@ -8,7 +8,7 @@ score(u, v) = W_COS * cosine(u, v) + W_POP * pop01(v)
   pop01 : log1p(popularity) rescaled to [0, 1] over the whole catalogue
 
 Why not the plain dot product: item vector norms correlate with popularity
-(r = 0.78), so the dot product mostly returns popular recipes. 
+(r = 0.78), so the dot product mostly returns popular recipes.
 Measured by Hajar on validation with fold-in vectors (what the app uses):
   - dot product   : NDCG@10 0.0389, 8.7/10 meals in common with the popularity box
   - cosine only   : NDCG@10 0.0216
