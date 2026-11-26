@@ -5,7 +5,9 @@
   "dim": 64,
   "lr": 0.001,
   "batch_size": 2048,
-  "epochs": 30,
+  "epochs": 10,
+  "eval_every": 1,
+  "patience": 4,
   "lightgcn": true,
   "out": "models/lightgcn.pt"
 }
