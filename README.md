@@ -16,7 +16,7 @@ Personalized weekly ready-meal box for students within a chosen budget range.
 
 ## Quick start (from an empty folder)
 
-**Requirements:** Python 3.10 or newer, Git, and a free Kaggle account for the dataset.
+**Requirements:** Python 3.10 to 3.12 (3.12 recommended), Git, and a free Kaggle account for the dataset.
 
 All commands are run from the project root.
 
@@ -153,7 +153,7 @@ python src/plot_history.py models/nlgcl_history.csv
 # Baselines (Random, Most-Popular) with the shared evaluation harness
 python src/run_baselines.py
 
-# Risk control : conformal calibration of the replacement threshold on validation
+# Risk control: conformal calibration of the replacement threshold on validation
 # (fold-in vectors + app score, alpha = 0.015), writes configs/risk_threshold.json (versioned)
 python src/risk_control.py --foldin
 
@@ -184,6 +184,9 @@ python src/eval_by_activity.py --ckpt models/nlgcl.pt
 
 # Export the embeddings used by the API (replaces models/embeddings.npz)
 python src/export_embeddings.py --ckpt models/nlgcl.pt
+
+# After exporting new embeddings, recalibrate the risk threshold (it is only valid for the embeddings it was calibrated on)
+python src/risk_control.py --foldin
 ```
 
 Each run writes to `models/`: the checkpoint (`.pt`), the per-epoch history (`_history.csv`) and the results (`_results.json`). These files are not versioned; only `models/embeddings.npz` is. Command-line options override the config file, e.g. `--epochs 10`.
@@ -208,7 +211,7 @@ configs/
   risk_threshold.json   Calibrated risk threshold (alpha = 1.5%)
 data/
   processed/            CSV outputs of the data pipeline (not versioned)
-  raw/                  Raw datasets (not versioned, see "Datasets")
+  raw/                  Raw datasets (not versioned, see step 4)
   studeat.db            SQLite database (not versioned)
 models/
   embeddings.npz        Trained embeddings used by the API (versioned)
@@ -245,7 +248,6 @@ src/
   train.py              Training and evaluation (NDCG@10, Recall@20)
 project_description_2026_2027_figures.ipynb   Figures of the project description
 README.md
-ROADMAP.md              Team roadmap
 requirements.txt
 ```
 
