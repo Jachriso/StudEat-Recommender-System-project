@@ -18,7 +18,7 @@ import requests
 import streamlit as st
 from PIL import Image
 
-API_URL = os.getenv("STUDEAT_API_URL", "http://localhost:8000")
+API_URL = os.getenv("STUDEAT_API_URL", "http://127.0.0.1:8000")
 ASSETS = Path(__file__).resolve().parent / "assets"
 LOGO = Image.open(ASSETS / "logo.png")
 
