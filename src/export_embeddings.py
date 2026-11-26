@@ -1,8 +1,8 @@
-"""StudEat - MLE-Core : exporte un checkpoint en un fichier .npz leger (numpy).
+"""StudEat - MLE-Core: export a checkpoint to a light .npz file (numpy).
 
-L'API n'a ainsi pas besoin de PyTorch ni du graphe pour scorer.
+The API then needs neither PyTorch nor the graph to score meals.
 
-Usage (racine du projet) :
+Usage (from the project root):
   python src/export_embeddings.py --ckpt models/nlgcl.pt --out models/embeddings.npz
 """
 import argparse
@@ -19,7 +19,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument("--ckpt", required=True)
     p.add_argument("--out", default="models/embeddings.npz")
-    p.add_argument("--data-dir", default=None, help="par defaut : celui du checkpoint")
+    p.add_argument("--data-dir", default=None, help="default: the one stored in the checkpoint")
     a = p.parse_args()
 
     import pandas as pd
@@ -28,7 +28,7 @@ def main():
     d = a.data_dir or cfg["data_dir"]
     ucol, icol, rcol = cfg["user_col"], cfg["item_col"], cfg["rating_col"]
 
-    # meme construction que train.py : indices bases sur le train uniquement
+    # same construction as train.py: indices built from the training split only
     train = read_split(f"{d}/train.csv", ucol, icol, rcol, cfg["pos_threshold"])
     user_ids, item_ids = ck["user_ids"], ck["item_ids"]
     u2i = pd.Series(np.arange(len(user_ids)), index=user_ids)
@@ -47,7 +47,7 @@ def main():
     os.makedirs(os.path.dirname(a.out) or ".", exist_ok=True)
     np.savez_compressed(a.out, U=U.numpy(), V=V.numpy(), user_ids=np.asarray(user_ids),
                         item_ids=np.asarray(item_ids), popularity=pop)
-    print(f"exporte : {a.out}  ({len(user_ids)} users, {len(item_ids)} items)")
+    print(f"exported: {a.out}  ({len(user_ids)} users, {len(item_ids)} items)")
 
 
 if __name__ == "__main__":

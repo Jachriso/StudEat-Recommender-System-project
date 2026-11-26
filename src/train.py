@@ -1,21 +1,21 @@
 """
-StudEat - MLE-Core : entrainement et evaluation de NLGCL / LightGCN.
+StudEat - MLE-Core: training and evaluation of NLGCL / LightGCN.
 
-Usage (depuis la racine du projet) :
+Usage (from the project root):
 
   # NLGCL
   python src/train.py --epochs 30
 
-  # Baseline LightGCN (meme code, loss contrastive desactivee)
+  # LightGCN baseline (same code, contrastive loss disabled)
   python src/train.py --epochs 30 --lightgcn --out models/lightgcn.pt
 
-Fichiers attendus dans data/processed/ : train.csv, val.csv, test.csv
-avec une colonne utilisateur, une colonne recette et (optionnel) une note.
-Adapte --user-col / --item-col / --rating-col si les noms different.
+Expected files in data/processed/: train.csv, val.csv, test.csv
+with a user column, a recipe column and (optionally) a rating.
+Adapt --user-col / --item-col / --rating-col if the names differ.
 
-Choix a valider avec l'equipe :
-  - un "positif" = note >= --pos-threshold (4 par defaut) ;
-  - les users/items absents du train sont ignores a l'evaluation (cold start non evalue ici).
+Choices:
+  - a "positive" = rating >= --pos-threshold (4 by default);
+  - users/items absent from the training split are ignored at evaluation (cold start not evaluated here).
 """
 import argparse
 import os
@@ -32,10 +32,10 @@ from model_nlgcl import NLGCL, build_norm_adj
 
 
 # ----------------------------------------------------------------------------
-# Donnees
+# Data
 # ----------------------------------------------------------------------------
 def read_split(path, ucol, icol, rcol, thr):
-    """Lit un CSV et ne garde que les interactions positives (note >= thr)."""
+    """Read a CSV and keep only the positive interactions (rating >= thr)."""
     cols = [ucol, icol] + ([rcol] if rcol else [])
     df = pd.read_csv(path, usecols=cols)
     if rcol:
@@ -44,7 +44,7 @@ def read_split(path, ucol, icol, rcol, thr):
 
 
 def map_split(df, u2i, i2i, ucol, icol):
-    """Convertit les ids en indices 0..n-1 ; ignore les users/items inconnus du train."""
+    """Convert ids to indices 0..n-1; ignore users/items unknown to the training split."""
     u = df[ucol].map(u2i)
     i = df[icol].map(i2i)
     keep = u.notna() & i.notna()
@@ -59,15 +59,15 @@ def to_csr(u, i, n_users, n_items):
 
 
 # ----------------------------------------------------------------------------
-# Echantillonnage des negatifs (item non vu par l'utilisateur dans le train)
+# Negative sampling (item not seen by the user in the training split)
 # ----------------------------------------------------------------------------
 class NegSampler:
-    """Negatifs = items jamais vus par l'user dans le train.
+    """Negatives = items never seen by the user in the training split.
 
-    alpha = 0 : tirage uniforme (comportement d'origine).
-    alpha > 0 : probabilite proportionnelle a popularite**alpha. Les negatifs sont alors
-    des items populaires que l'user n'a PAS aimes : le modele ne peut plus gagner juste
-    en repetant "les populaires sont bons", il doit apprendre ce qui est propre a l'user.
+    alpha = 0: uniform sampling (original behaviour).
+    alpha > 0: probability proportional to popularity**alpha. Negatives are then
+    popular items the user did NOT like: the model can no longer win just by
+    repeating "popular items are good", it has to learn what is specific to the user.
     """
     def __init__(self, tr_u, tr_i, n_items, seed=0, alpha=0.0):
         self.n_items = n_items
@@ -90,7 +90,7 @@ class NegSampler:
 
     def sample(self, users):
         neg = self._draw(len(users))
-        for _ in range(5):                      # quelques re-tirages suffisent
+        for _ in range(5):                      # a few redraws are enough
             bad = self._seen(users.astype(np.int64) * self.n_items + neg)
             if not bad.any():
                 break
@@ -99,19 +99,19 @@ class NegSampler:
 
 
 # ----------------------------------------------------------------------------
-# Evaluation : NDCG@10 et Recall@20 (classement complet du catalogue)
+# Evaluation: NDCG@10 and Recall@20 (full-catalogue ranking)
 # ----------------------------------------------------------------------------
 @torch.no_grad()
 def evaluate(model, truth, masks, device, chunk=1024, k_ndcg=10, k_rec=20):
-    """truth : csr (users x items) des items a retrouver.
-    masks : liste de csr dont les items sont exclus du classement (deja vus)."""
+    """truth: csr (users x items) of the items to retrieve.
+    masks: list of csr whose items are excluded from the ranking (already seen)."""
     model.eval()
     U, V = model.final_embeddings()
-    users = np.where(np.diff(truth.indptr) > 0)[0]       # users ayant du test
+    users = np.where(np.diff(truth.indptr) > 0)[0]       # users with at least one item to retrieve
     k_max = min(max(k_ndcg, k_rec), V.size(0))
 
     discount = 1.0 / torch.log2(torch.arange(2, k_ndcg + 2, device=device).float())
-    idcg_table = torch.cumsum(discount, dim=0)            # IDCG pour 1..k_ndcg hits
+    idcg_table = torch.cumsum(discount, dim=0)            # IDCG for 1..k_ndcg hits
 
     ndcgs, recalls = [], []
     for s in range(0, len(users), chunk):
@@ -136,17 +136,17 @@ def evaluate(model, truth, masks, device, chunk=1024, k_ndcg=10, k_rec=20):
 
 @torch.no_grad()
 def val_bpr_loss(model, va_u, va_i, sampler, device, chunk=10000):
-    """BPR moyenne sur les paires de validation."""
+    """Mean BPR loss over the validation pairs."""
     model.eval()
     U, V = model.final_embeddings()
-    va_n = sampler.sample(va_u)       # un négatif par paire val
+    va_n = sampler.sample(va_u)       # one negative per validation pair
     total = 0.0
     for s in range(0, len(va_u), chunk):
         u = U[torch.as_tensor(va_u[s:s + chunk], device=device)]
-        p = V[torch.as_tensor(va_i[s:s + chunk], device=device)]   # embeddings des items positifs (attention : V, pas d'offset n_users)
-        n = V[torch.as_tensor(va_n[s:s + chunk], device=device)]   # embeddings des items négatifs
-        # score = produit scalaire user·item ; BPR = -logsigmoid(score_pos - score_neg)
-        total += (-F.logsigmoid((u * p).sum(dim=1) - (u * n).sum(dim=1))).sum().item()   # SOMME sur le paquet (pas la moyenne), en float Python
+        p = V[torch.as_tensor(va_i[s:s + chunk], device=device)]   # embeddings of the positive items (note: V, no n_users offset)
+        n = V[torch.as_tensor(va_n[s:s + chunk], device=device)]   # embeddings of the negative items
+        # score = user·item dot product; BPR = -logsigmoid(score_pos - score_neg)
+        total += (-F.logsigmoid((u * p).sum(dim=1) - (u * n).sum(dim=1))).sum().item()   # SUM over the chunk (not the mean), as a Python float
     model.train()
     return total / len(va_u)
 
@@ -160,7 +160,7 @@ def main():
     p.add_argument("--user-col", default="user_id")
     p.add_argument("--item-col", default="recipe_id")
     p.add_argument("--rating-col", default="rating",
-                   help="colonne de note ('' pour ne pas filtrer)")
+                   help="rating column ('' to disable filtering)")
     p.add_argument("--pos-threshold", type=float, default=4)
     p.add_argument("--epochs", type=int, default=30)
     p.add_argument("--batch-size", type=int, default=2048)
@@ -170,17 +170,17 @@ def main():
     p.add_argument("--tau", type=float, default=0.2)
     p.add_argument("--lambda-cl", type=float, default=0.1)
     p.add_argument("--lightgcn", action="store_true",
-                   help="baseline LightGCN (lambda_cl = 0)")
+                   help="LightGCN baseline (lambda_cl = 0)")
     p.add_argument("--eval-every", type=int, default=2)
     p.add_argument("--patience", type=int, default=5,
-                   help="arret si NDCG@10 val ne s'ameliore pas pendant N evaluations")
+                   help="stop if validation NDCG@10 does not improve for N evaluations")
     p.add_argument("--out", default="models/nlgcl.pt")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--neg-alpha", type=float, default=0.0,
-                   help="negatifs ~ popularite**alpha (0 = uniforme ; essayer 0.5 ou 0.75)")
+                   help="negatives ~ popularity**alpha (0 = uniform; try 0.5 or 0.75)")
     p.add_argument("--mask-dup", action="store_true",
-                   help="contrastif : ne pas traiter les doublons du batch comme des negatifs")
-    p.add_argument("--config", default=None, help="fichier JSON d'hyperparametres")
+                   help="contrastive loss: do not treat batch duplicates as negatives")
+    p.add_argument("--config", default=None, help="JSON file of hyperparameters")
 
     pre, _ = p.parse_known_args()
     if pre.config:
@@ -193,9 +193,9 @@ def main():
     np.random.seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     lam = 0.0 if args.lightgcn else args.lambda_cl
-    print(f"device={device}  modele={'LightGCN' if lam == 0 else 'NLGCL'}  lambda_cl={lam}")
+    print(f"device={device}  model={'LightGCN' if lam == 0 else 'NLGCL'}  lambda_cl={lam}")
 
-    # --- 1. donnees ---------------------------------------------------------
+    # --- 1. data ------------------------------------------------------------
     d = args.data_dir
     ucol, icol, rcol = args.user_col, args.item_col, args.rating_col
     train = read_split(f"{d}/train.csv", ucol, icol, rcol, args.pos_threshold)
@@ -204,7 +204,7 @@ def main():
     test = (read_split(test_path, ucol, icol, rcol, args.pos_threshold)
             if os.path.exists(test_path) else None)
 
-    # indices contigus construits UNIQUEMENT sur le train (pas de fuite)
+    # contiguous indices built ONLY from the training split (no leakage)
     user_ids = np.sort(train[ucol].unique())
     item_ids = np.sort(train[icol].unique())
     n_users, n_items = len(user_ids), len(item_ids)
@@ -214,15 +214,15 @@ def main():
     tr_u, tr_i, _ = map_split(train, u2i, i2i, ucol, icol)
     va_u, va_i, va_drop = map_split(val, u2i, i2i, ucol, icol)
     print(f"train: {len(tr_u)} interactions, {n_users} users, {n_items} items")
-    print(f"val  : {len(va_u)} interactions gardees, {va_drop} ignorees (user/item inconnu du train)")
+    print(f"val  : {len(va_u)} interactions kept, {va_drop} ignored (user/item unknown to the training split)")
     if test is not None:
         te_u, te_i, te_drop = map_split(test, u2i, i2i, ucol, icol)
-        print(f"test : {len(te_u)} interactions gardees, {te_drop} ignorees")
+        print(f"test : {len(te_u)} interactions kept, {te_drop} ignored")
 
     train_csr = to_csr(tr_u, tr_i, n_users, n_items)
     val_csr = to_csr(va_u, va_i, n_users, n_items)
 
-    # --- 2. modele ----------------------------------------------------------
+    # --- 2. model -----------------------------------------------------------
     adj = build_norm_adj(tr_u, tr_i, n_users, n_items)
     model = NLGCL(n_users, n_items, adj, dim=args.dim, n_layers=args.layers,
                   tau=args.tau, lambda_cl=lam,
@@ -231,7 +231,7 @@ def main():
     sampler = NegSampler(tr_u, tr_i, n_items, seed=args.seed, alpha=args.neg_alpha)
     val_sampler = NegSampler(tr_u, tr_i, n_items, seed=args.seed + 1)
 
-    # --- 3. entrainement ----------------------------------------------------
+    # --- 3. training --------------------------------------------------------
     best_ndcg, best_epoch, bad_evals = -1.0, 0, 0
     history =[]
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
@@ -283,11 +283,11 @@ def main():
         pd.DataFrame(history).to_csv(args.out.replace(".pt", "_history.csv"), index=False)
 
         if bad_evals >= args.patience:
-            print(f"arret anticipe (meilleur epoch = {best_epoch})")
+            print(f"early stopping (best epoch = {best_epoch})")
             break
 
-    # --- 4. evaluation finale sur le test (une seule fois !) ----------------
-    print(f"\nmeilleur val NDCG@10 = {best_ndcg:.4f} (epoch {best_epoch})")
+    # --- 4. final evaluation on the test split (only once!) -----------------
+    print(f"\nbest val NDCG@10 = {best_ndcg:.4f} (epoch {best_epoch})")
     test_ndcg, test_rec = None, None 
     if test is not None and best_epoch > 0:
         ckpt = torch.load(args.out, map_location=device, weights_only=False)
@@ -296,7 +296,7 @@ def main():
         ndcg, rec, n_eval = evaluate(model, test_csr, [train_csr, val_csr], device)
         test_ndcg, test_rec = ndcg, rec
         print(f"TEST  NDCG@10={ndcg:.4f}  Recall@20={rec:.4f}  ({n_eval} users)")
-    print(f"checkpoint : {args.out}  (ne pas le committer dans git)")
+    print(f"checkpoint : {args.out}  (do not commit it to git)")
 
     results = {"config": vars(args), "best_epoch": best_epoch,
                "best_val_ndcg10": best_ndcg,

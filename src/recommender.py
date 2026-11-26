@@ -1,11 +1,11 @@
-"""StudEat - MLE-Core : scores du modele pour l'API (numpy uniquement, sans PyTorch).
+"""StudEat - MLE-Core: model scores for the API (numpy only, no PyTorch).
 
   rec = Recommender("models/embeddings.npz")
   rec.score_items(user_id, item_ids)   -> (scores, source)   source = "model" | "popularity"
 
-Un etudiant sans historique n'a pas d'embedding dans le graphe : on retombe alors
-sur la popularite (cold start), au lieu de planter. Les filtres durs (allergies,
-regime, budget) restent appliques par l'API AVANT, le modele ne fait que classer.
+A student without history has no embedding in the graph: we then fall back on
+popularity (cold start) instead of crashing. Hard filters (allergies, diet,
+budget) are still applied by the API BEFORE; the model only ranks.
 """
 import numpy as np
 
@@ -23,8 +23,8 @@ class Recommender:
         return int(user_id) in self._user_row
 
     def score_items(self, user_id, item_ids):
-        """Scores des items demandes (ids Food.com). Items inconnus du modele : -inf.
-        Retourne (np.array des scores, "model" ou "popularity")."""
+        """Scores of the requested items (Food.com ids). Items unknown to the model: -inf.
+        Returns (np.array of scores, "model" or "popularity")."""
         cols = np.array([self._item_col.get(int(i), -1) for i in item_ids])
         ok = cols >= 0
         out = np.full(len(cols), -np.inf, dtype=np.float32)
@@ -35,7 +35,7 @@ class Recommender:
         return out, "popularity"
 
     def top_k(self, user_id, item_ids, k=10, exclude=()):
-        """Les k meilleurs parmi item_ids (hors exclude). Retourne (liste de (id, score), source)."""
+        """The k best among item_ids (excluding exclude). Returns (list of (id, score), source)."""
         ex = {int(e) for e in exclude}
         cand = [int(i) for i in item_ids if int(i) not in ex]
         scores, src = self.score_items(user_id, cand)

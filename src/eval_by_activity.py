@@ -1,7 +1,7 @@
-"""StudEat - NDCG/Recall par tranche d'activite : modele vs popularite (test).
+"""StudEat - NDCG/Recall by user-activity bucket: model vs popularity (test).
 
-Usage : python src/eval_by_activity.py --ckpt models/nlgcl.pt
-La tranche = nombre d'interactions positives de l'utilisateur dans le train.
+Usage: python src/eval_by_activity.py --ckpt models/nlgcl.pt
+Bucket = number of positive interactions of the user in the training split.
 """
 import argparse
 
@@ -65,12 +65,12 @@ def main():
     masks = [csr["train"], csr["val"]]
     users, nd_m, rc_m = per_user(lambda ub: U[torch.as_tensor(ub)] @ V.T, csr["test"], masks)
     _, nd_p, rc_p = per_user(lambda ub: pop.unsqueeze(0).repeat(len(ub), 1), csr["test"], masks)
-    print(f"\nTOUS ({len(users)} users) | modele NDCG@10={nd_m.mean():.4f} Recall@20={rc_m.mean():.4f}"
-          f" | popularite NDCG@10={nd_p.mean():.4f} Recall@20={rc_p.mean():.4f}")
+    print(f"\nALL ({len(users)} users) | model NDCG@10={nd_m.mean():.4f} Recall@20={rc_m.mean():.4f}"
+          f" | popularity NDCG@10={nd_p.mean():.4f} Recall@20={rc_p.mean():.4f}")
 
     act = np.diff(csr["train"].indptr)[users]
-    print(f"\n{'interactions train':<20}{'users':>7}{'pop NDCG':>11}{'modele NDCG':>13}{'delta':>9}"
-          f"{'pop Rec':>10}{'modele Rec':>12}")
+    print(f"\n{'interactions train':<20}{'users':>7}{'pop NDCG':>11}{'model NDCG':>13}{'delta':>9}"
+          f"{'pop Rec':>10}{'model Rec':>12}")
     for lo, hi in [(1, 5), (6, 10), (11, 20), (21, 10**9)]:
         sel = (act >= lo) & (act <= hi)
         if sel.sum() == 0:
