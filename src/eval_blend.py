@@ -1,11 +1,11 @@
-"""StudEat - melange modele + popularite.
+"""StudEat - blend of the model score and item popularity.
 
-score(u, i) = score_modele(u, i) + w * sigma * z_i
-  z_i   = log(1 + nb de notes positives de l'item dans le train), centre et reduit
-  sigma = ecart-type des scores du modele (pour que w soit comparable d'un modele a l'autre)
+score(u, i) = model_score(u, i) + w * sigma * z_i
+  z_i   = log(1 + number of positive ratings of the item in train), standardised
+  sigma = standard deviation of the model scores (so that w is comparable across models)
 
-Le poids w est choisi sur la VALIDATION (moyenne des seeds). Le test n'est lu
-qu'une seule fois, au w choisi.
+The weight w is chosen on VALIDATION (mean over seeds). The test split is read
+only once, at the chosen w.
 
 Usage :
   python src/eval_blend.py --ckpt models/lam/nlgcl_l0.01_s0.pt models/lam/nlgcl_l0.01_s1.pt models/lam/nlgcl_l0.01_s2.pt
@@ -21,7 +21,7 @@ from train import evaluate, map_split, read_split, to_csr
 
 
 class Shim:
-    """Meme interface que NLGCL pour reutiliser evaluate()."""
+    """Same interface as NLGCL, to reuse evaluate()."""
     def __init__(self, U, V):
         self.U, self.V = U, V
 
@@ -84,7 +84,7 @@ def main():
             out.append((n, r))
         return np.array(out)
 
-    print(f"{len(embs)} modeles ; choix de w sur la VALIDATION")
+    print(f"{len(embs)} models; w is chosen on VALIDATION")
     print(f"{'w':>6}{'val NDCG@10':>14}")
     best_w, best_v = None, -1
     for w in a.weights:
@@ -94,7 +94,7 @@ def main():
             best_w, best_v = w, v.mean()
 
     t = run(test_csr, [train_csr, val_csr], best_w)
-    print(f"\nw choisi (validation) = {best_w}")
+    print(f"\nchosen w (validation) = {best_w}")
     print(f"TEST NDCG@10 = {t[:, 0].mean():.4f} +/- {t[:, 0].std():.4f}   "
           f"Recall@20 = {t[:, 1].mean():.4f} +/- {t[:, 1].std():.4f}")
 
