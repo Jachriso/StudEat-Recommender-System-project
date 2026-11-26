@@ -1,11 +1,14 @@
 """StudEat - MLE-Ops: ranking of the meal catalogue for the API.
 
 - Student with ratings >= 4 in the app: user vector = mean of the NLGCL
-  embeddings of the meals they liked (fold-in, no retraining needed).
+  embeddings of the meals they liked (fold-in, no retraining needed), and
+  score = 0.7 x cosine + 0.3 x popularity (src/scoring.py, shared with the
+  calibration so the risk threshold is on the same scale).
 - Student without ratings (cold start): popularity in Food.com.
-- Risk control (configs/risk_threshold.json): a meal whose model score is
-  below the calibrated threshold t is "risky" and goes after the meals the
-  student already liked (Replace strategy of risk_control.py).
+- Risk control (configs/risk_threshold.json, calibrated with
+  `python src/risk_control.py --foldin`): a meal whose score is below the
+  threshold t is "risky" and goes after the meals the student already liked
+  (Replace strategy of risk_control.py).
 """
 import json
 from pathlib import Path
@@ -13,6 +16,7 @@ from pathlib import Path
 import numpy as np
 
 from src.recommender import Recommender
+from src.scoring import blend_scores, pop01
 
 ROOT = Path(__file__).resolve().parent.parent
 EMB_PATH = ROOT / "models" / "embeddings.npz"
@@ -22,10 +26,17 @@ RISK_PATH = ROOT / "configs" / "risk_threshold.json"
 class StudEatModel:
     def __init__(self, emb_path=EMB_PATH, risk_path=RISK_PATH):
         self.rec = Recommender(emb_path)
-        self.threshold = -np.inf                      # no risk control if no file
+        self.pop = pop01(np.expm1(self.rec.pop))      # rec.pop = log1p(popularity)
+        self.threshold = -np.inf                       # no risk control by default
         if Path(risk_path).exists():
             with open(risk_path) as f:
-                self.threshold = json.load(f)["threshold"]
+                cfg = json.load(f)
+            if cfg.get("mode") == "foldin_blend":
+                self.threshold = cfg["threshold"]
+            else:   # a threshold from another scale would filter nothing (or everything)
+                print(f"[StudEatModel] {risk_path}: mode {cfg.get('mode')!r} is not "
+                      "'foldin_blend', risk control disabled. Re-run "
+                      "`python src/risk_control.py --foldin`.")
 
     def _cols(self, ids):
         """Rows of V for Food.com ids (-1 if the model does not know the meal)."""
@@ -48,8 +59,9 @@ class StudEatModel:
             source, risky = "popularity", np.zeros(len(ids), dtype=bool)
         else:
             cols = self._cols(ids)
+            ok = cols >= 0
             raw = np.full(len(ids), -np.inf)
-            raw[cols >= 0] = self.rec.V[cols[cols >= 0]] @ u
+            raw[ok] = blend_scores(u, self.rec.V[cols[ok]], self.pop[cols[ok]])
             source = "model"
             liked = np.isin(ids, list(liked_ids))
             risky = (raw < self.threshold) & ~liked   # liked meals are safe replacements
