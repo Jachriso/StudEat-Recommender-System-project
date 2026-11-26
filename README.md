@@ -60,7 +60,7 @@ The raw data files are not versioned. Put them in `data/raw/`.
 2. Click **Download** (the main button — not "selected columns")
 3. Extract the zip and copy the two CSV files into `data/raw/`
 
-**Open Food Facts Prices (optional)** — `prices.parquet`. Without it, the pipeline uses a static price table.
+**Open Food Facts Prices** — required: `prices.parquet`. Used as the primary price source; the static fallback only covers ingredients not found in this file.
 
 ```bash
 # macOS / Linux
