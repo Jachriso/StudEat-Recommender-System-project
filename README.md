@@ -246,7 +246,6 @@ src/
   seed_test_data.py     Synthetic test students and ratings
   test_forward.py       Quick model check on synthetic data
   train.py              Training and evaluation (NDCG@10, Recall@20)
-project_description_2026_2027_figures.ipynb   Figures of the project description
 README.md
 requirements.txt
 ```
