@@ -1,0 +1,8 @@
+[theme]
+base = "light"
+primaryColor = "#C2410C"
+backgroundColor = "#FFFBF5"
+secondaryBackgroundColor = "#FFF0E3"
+textColor = "#2B2118"
+font = "Poppins:https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;800&display=swap, sans-serif"
+baseRadius = "large"
