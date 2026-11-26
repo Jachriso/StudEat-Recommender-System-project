@@ -1,0 +1,8 @@
+{
+  "alpha": 0.015,
+  "threshold": 0.20152598630263385,
+  "n": 3007,
+  "k": 10,
+  "unwanted_max": 2,
+  "mode": "foldin_blend"
+}

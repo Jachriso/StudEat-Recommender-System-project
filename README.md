@@ -132,6 +132,13 @@ python src/eval_cosine.py --ckpt models/benchmark/nlgcl_s0.pt models/benchmark/n
 # Results by user-activity level
 python src/eval_by_activity.py --ckpt models/nlgcl.pt
 
+# Risk control : conformal calibration of the replacement threshold on validation
+# (fold-in vectors + app score, alpha = 0.015), writes configs/risk_threshold.json
+python src/risk_control.py --foldin
+
+# Risk control on test + NDCG@10 / Recall@20 with and without it, writes reports/risk_rows.json
+python src/risk_eval.py
+
 # Export the embeddings used by the API (replaces models/embeddings.npz)
 python src/export_embeddings.py --ckpt models/nlgcl.pt
 ```
@@ -144,37 +151,46 @@ Each run writes to `models/`: the checkpoint (`.pt`), the per-epoch history (`_h
 
 ```
 api/
-  main.py               FastAPI backend (endpoints, hard filters, placeholder predict())
+  catalogue.py          Meal catalogue built from the Food.com recipes (diets, allergens, prices)
+  main.py               FastAPI backend (endpoints, hard filters, predict() via api/model.py)
   mock_data.py          Mock meal catalogue (fallback when the pipeline has not been run)
+  model.py              Ranking for the API (fold-in, popularity fallback, risk control)
 app/
   app.py                Streamlit interface (sign-up, weekly box, meal rating)
 configs/
-  nlgcl.json            Hyperparameters of NLGCL
   lightgcn.json         Same configuration without the contrastive loss
+  nlgcl.json            Hyperparameters of NLGCL
+  risk_threshold.json   Calibrated risk threshold (alpha = 1.5%)
 data/
-  raw/                  Raw datasets (not versioned, see "Datasets")
   processed/            CSV outputs of the data pipeline (not versioned)
+  raw/                  Raw datasets (not versioned, see "Datasets")
   studeat.db            SQLite database (not versioned)
 models/
   embeddings.npz        Trained embeddings used by the API (versioned)
                         Checkpoints and histories (not versioned)
 reports/figures/        Figures used in the reports
 src/
+  baselines.py          Random and Most-Popular baselines (MLE-Ops version)
   data_pipeline.py      Data pipeline
-  pipeline_config.py    Static configuration of the pipeline
-  model_nlgcl.py        NLGCL / LightGCN model
-  train.py              Training and evaluation (NDCG@10, Recall@20)
-  test_forward.py       Quick model check on synthetic data
-  plot_history.py       Training curves
+  eval_blend.py         Blend of the model score with popularity (weight chosen on validation)
+  eval_by_activity.py   Results by user-activity level
+  eval_cosine.py        Cosine + popularity score on fold-in vectors (API score)
+  eval_popularity.py    Popularity baseline (MLE-Core version)
   evaluation.py         Shared evaluation harness (NDCG@10, Recall@20) used for all models
+  export_embeddings.py  Export of the trained embeddings
+  model_nlgcl.py        NLGCL / LightGCN model
+  pipeline_config.py    Static configuration of the pipeline
+  plot_history.py       Training curves
+  recommender.py        Recommender used by the API (popularity fallback for new students)
+  risk_control.py       Conformal calibration of the risk threshold
+  risk_data_check.py    Share of unwanted ratings (<= 2) per split
+  risk_eval.py          Risk control on test + ablation rows for the benchmark
   run_baselines.py      Random and Most-Popular baselines with the shared harness
   run_benchmark.py      Final benchmark: all models over 3 seeds, one results table
-  baselines.py          Random and Most-Popular baselines (MLE-Ops version)
-  eval_popularity.py    Popularity baseline (MLE-Core version)
-  eval_by_activity.py   Results by user-activity level
-  export_embeddings.py  Export of the trained embeddings
-  recommender.py        Recommender used by the API (popularity fallback for new students)
+  scoring.py            App score (0.7 x cosine + 0.3 x popularity), shared with the calibration
   seed_test_data.py     Synthetic test students and ratings
+  test_forward.py       Quick model check on synthetic data
+  train.py              Training and evaluation (NDCG@10, Recall@20)
 requirements.txt
 ```
 
