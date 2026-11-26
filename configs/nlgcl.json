@@ -1,10 +1,12 @@
 {
-  "lambda_cl": 0.001,
+  "lambda_cl": 0.01,
   "tau": 0.2,
   "layers": 3,
   "dim": 64,
   "lr": 0.001,
   "batch_size": 2048,
-  "epochs": 30,
+  "epochs": 10,
+  "eval_every": 1,
+  "patience": 4,
   "out": "models/nlgcl.pt"
 }

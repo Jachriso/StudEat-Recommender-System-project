@@ -1,7 +1,7 @@
 fastapi
 uvicorn[standard]
 pydantic
-streamlit
+streamlit>=1.46
 requests
 pandas>=2.0
 numpy>=2
