@@ -75,7 +75,7 @@ def main():
     p = argparse.ArgumentParser(description="Conformal calibration of the replacement threshold")
     p.add_argument("--emb", default="models/embeddings.npz")
     p.add_argument("--data-dir", default="data/processed")
-    p.add_argument("--alpha", type=float, default=0.01)
+    p.add_argument("--alpha", type=float, default=0.015)
     p.add_argument("--k", type=int, default=10)
     p.add_argument("--unwanted-max", type=int, default=2)
     p.add_argument("--foldin", action="store_true",
