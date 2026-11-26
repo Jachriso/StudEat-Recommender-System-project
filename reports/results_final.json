@@ -84,6 +84,36 @@
         0.07656724012119308
       ],
       "test_users": 1434
+    },
+    {
+      "model": "NLGCL fold-in (app score) (no risk control)",
+      "val_ndcg": [
+        0.03643110550798389
+      ],
+      "test_ndcg": [
+        0.03208906106583502
+      ],
+      "test_recall": [
+        0.0750724926444318
+      ],
+      "unwanted_rate": [
+        0.021767823513586224
+      ]
+    },
+    {
+      "model": "NLGCL fold-in (app score) + risk control (alpha = 0.015)",
+      "val_ndcg": [
+        0.03643110550798389
+      ],
+      "test_ndcg": [
+        0.03208906106583502
+      ],
+      "test_recall": [
+        0.0750724926444318
+      ],
+      "unwanted_rate": [
+        0.019545601291364
+      ]
     }
   ]
 }

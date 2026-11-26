@@ -86,12 +86,47 @@ The trained model is provided in the repository (`models/embeddings.npz`), so **
 Open **two terminals** and activate the virtual environment in each of them.
 
 ```bash
-# Terminal 1 — API: http://localhost:8000/docs
+# Terminal 1 — API: http://127.0.0.1:8000/docs
 python -m uvicorn api.main:app --reload
 
-# Terminal 2 — interface: http://localhost:8501
+# Terminal 2 — interface: http://127.0.0.1:8501
 python -m streamlit run app/app.py
 ```
+
+---
+
+## Results
+
+Final benchmark on the temporal test split (1,434 students), written by `src/run_benchmark.py` to
+[`reports/results_final.md`](reports/results_final.md). Every row uses the shared harness `src/evaluation.py`:
+full-catalogue ranking, meals already rated in training masked, positives = ratings ≥ 4.
+
+| Model | Val NDCG@10 | Test NDCG@10 | Test Recall@20 | Unwanted-meal rate |
+|---|---|---|---|---|
+| Random (5 seeds) | 0.0010 ± 0.0004 | 0.0009 ± 0.0005 | 0.0027 ± 0.0010 | n/a |
+| Most-Popular | 0.0375 | 0.0350 | 0.0838 | n/a |
+| LightGCN (3 seeds) | 0.0379 ± 0.0002 | 0.0346 ± 0.0004 | 0.0869 ± 0.0017 | n/a |
+| NLGCL (3 seeds) | 0.0401 ± 0.0004 | 0.0326 ± 0.0011 | 0.0803 ± 0.0046 | n/a |
+| NLGCL fold-in (app score), no risk control | 0.0364 | 0.0321 | 0.0751 | 2.18 % |
+| NLGCL fold-in (app score) + risk control (α = 0.015) | 0.0364 | 0.0321 | 0.0751 | 1.95 % |
+
+± = sample standard deviation over seeds. "Unwanted" = a meal in the top 10 that the student rated 2 or less.
+
+**How to read it**
+
+- **Model choice.** NLGCL is the best model on validation (0.0401 vs 0.0379 for LightGCN), so it is the model
+  used by the app. The test split is read once and reported as it is.
+- **Popularity is hard to beat.** On the test period, LightGCN and Most-Popular are within noise of each other
+  and NLGCL is slightly lower. The data is very sparse (median of 5 ratings per student, temporal split),
+  so popularity is a strong signal.
+- **App score.** The app ranks meals with 0.7 × cosine + 0.3 × popularity on fold-in vectors
+  (`src/scoring.py`). It keeps about 90 % of the validation NDCG@10 of the learned vectors, and the box
+  changes after the student's ratings.
+- **Risk control.** The threshold is calibrated on validation with the same fold-in and score as the app
+  (`configs/risk_threshold.json`, α = 0.015). On test, unwanted meals drop from 2.18 % to 1.95 % with no loss
+  of accuracy. The test rate stays above α because the base risk is higher on the test period (2.18 % vs
+  1.80 % on validation): the guarantee assumes data like the calibration set, and our split is temporal.
+- **Latency** of `/recommend` is measured by `scripts/measure_latency.py` (see `reports/latency.md`).
 
 ---
 
@@ -155,6 +190,8 @@ api/
   main.py               FastAPI backend (endpoints, hard filters, predict() via api/model.py)
   mock_data.py          Mock meal catalogue (fallback when the pipeline has not been run)
   model.py              Ranking for the API (fold-in, popularity fallback, risk control)
+.streamlit/
+  config.toml           Streamlit theme (StudEat colours and font)
 app/
   app.py                Streamlit interface (sign-up, weekly box, meal rating)
 configs/
@@ -168,7 +205,14 @@ data/
 models/
   embeddings.npz        Trained embeddings used by the API (versioned)
                         Checkpoints and histories (not versioned)
-reports/figures/        Figures used in the reports
+reports/
+  figures/              Training curves used in the reports
+  posters/              The 3 StudEat posters (PNG + A3 PDF)
+  latency.md            Latency of /recommend (scripts/measure_latency.py)
+  results_final.md      Final benchmark table (+ results_final.json)
+  risk_rows.json        Risk-control rows of the benchmark (src/risk_eval.py)
+scripts/
+  measure_latency.py    Latency test of the API over HTTP
 src/
   baselines.py          Random and Most-Popular baselines (MLE-Ops version)
   data_pipeline.py      Data pipeline
@@ -191,6 +235,9 @@ src/
   seed_test_data.py     Synthetic test students and ratings
   test_forward.py       Quick model check on synthetic data
   train.py              Training and evaluation (NDCG@10, Recall@20)
+project_description_2026_2027_figures.ipynb   Figures of the project description
+README.md
+ROADMAP.md              Team roadmap
 requirements.txt
 ```
 
@@ -225,7 +272,7 @@ To test the full chain without a real rating campaign, insert synthetic students
 # Insert 8 test students (all diets/allergens covered) and 69 ratings
 python src/seed_test_data.py
 
-# Then call GET http://localhost:8000/recommend/{user_id}
+# Then call GET http://127.0.0.1:8000/recommend/{user_id}
 # with the user_id printed by the script (e.g. TEST_Alice: vegetarian, gluten-free)
 
 # Remove all test data when done
