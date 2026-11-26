@@ -114,35 +114,51 @@ def hard_filters(allergies: list[str], diet: str) -> list[dict]:
     ]
 
 
-def liked_meal_ids(user_id: int) -> list[int]:
-    """Meals the student rated 4 or 5 stars in the app (used for the fold-in)."""
+def latest_ratings(user_id: int) -> dict[int, int]:
+    """Latest rating (1-5) the student gave to each meal: a meal rated 5 then 1 counts as 1."""
     with _get_conn() as conn:
         rows = conn.execute(
-            "SELECT DISTINCT meal_id FROM app_ratings WHERE user_id = ? AND rating >= 4", (user_id,)
-        ).fetchall()
-    return [r["meal_id"] for r in rows]
-
-def disliked_meal_ids(user_id: int) -> set[int]:
-    """Meals whose latest rating by the student is 1 or 2 stars: never put them back in the box."""
-    with _get_conn() as conn:
-        rows = conn.execute(
-            "SELECT meal_id, rating, MAX(rowid) FROM app_ratings WHERE user_id = ? GROUP BY meal_id",
+            "SELECT meal_id, rating, MAX(id) FROM app_ratings WHERE user_id = ? GROUP BY meal_id",
             (user_id,),
         ).fetchall()
-    return {r["meal_id"] for r in rows if r["rating"] <= 2}
+    return {r["meal_id"]: r["rating"] for r in rows}
+
+
+def liked_meal_ids(user_id: int) -> list[int]:
+    """Meals whose latest rating is 4 or 5 stars (used for the fold-in)."""
+    return [m for m, r in latest_ratings(user_id).items() if r >= 4]
+
+
+def disliked_meal_ids(user_id: int) -> set[int]:
+    """Meals whose latest rating is 1 or 2 stars: kept out of the box when possible."""
+    return {m for m, r in latest_ratings(user_id).items() if r <= 2}
+
+
+def box_candidates(user_id: int, allergies: list[str], diet: str, budget_max: float, k: int) -> list[dict]:
+    """Meals the box can be built from: hard filters, minus the meals the student disliked.
+    If leaving out the disliked meals makes a complete box unaffordable, they are kept
+    (a full box the student can pay for comes first). Used by both /recommend and predict,
+    so the budget check and the ranking always see the same meals."""
+    allowed = hard_filters(allergies, diet)
+    disliked = disliked_meal_ids(user_id)
+    without = [m for m in allowed if m["id"] not in disliked]
+    if without and cheapest_box_cost(without, k) <= budget_max:
+        return without
+    return allowed
+
 
 def predict(user_id: int, budget_min: float, budget_max: float,
-            allergies: list[str], diet: str, k: int = 10) -> tuple[list[dict], str]:
+            allergies: list[str], diet: str, k: int = 10,
+            box_size: int | None = None) -> tuple[list[dict], str]:
     """Rank the meals the student can eat; return (top-k meals with a score, source).
 
     Agreed interface with MLE-Core / MLE-Ops. The ranking itself is done by
     StudEatModel (api/model.py): fold-in on the student's liked meals, popularity
     if they have not rated anything yet, and risk control. Random scores if the
-    model could not be loaded (plan B).
+    model could not be loaded (plan B). box_size: meals in the box (default k), used to
+    check which candidates keep a complete box affordable.
     """
-    candidates = hard_filters(allergies, diet)
-    disliked = disliked_meal_ids(user_id)
-    candidates = [m for m in candidates if m["id"] not in disliked] or candidates  # never an empty box
+    candidates = box_candidates(user_id, allergies, diet, budget_max, box_size or k)
     if MODEL is None:
         random.shuffle(candidates)
         return [{**m, "score": round(random.random(), 3)} for m in candidates[:k]], "random (model not loaded)"
@@ -239,11 +255,10 @@ def recommend(user_id: int):
         raise HTTPException(status_code=404, detail="Unknown user")
     k = p["meals_per_week"]
 
-    candidates = hard_filters(p["allergies"], p["diet"])
+    candidates = box_candidates(user_id, p["allergies"], p["diet"], p["budget_max"], k)
     if not candidates:
         raise HTTPException(status_code=422, detail="No meal matches these allergies and diet")
 
-    
     # Minimum feasible budget: price of the cheapest complete box with these constraints.
     min_feasible = cheapest_box_cost(candidates, k)
     if p["budget_max"] < min_feasible:
@@ -252,7 +267,8 @@ def recommend(user_id: int):
             detail=f"Budget too low: a box of {k} meals starts at {min_feasible} EUR with these constraints",
         )
 
-    ranked, source = predict(user_id, p["budget_min"], p["budget_max"], p["allergies"], p["diet"], k=len(candidates))
+    ranked, source = predict(user_id, p["budget_min"], p["budget_max"], p["allergies"], p["diet"],
+                             k=len(candidates), box_size=k)
     box = compose_box(ranked, p["budget_max"], k)
     total = round(sum(m["price"] for m in box), 2)
     return {
