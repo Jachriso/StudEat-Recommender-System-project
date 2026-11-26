@@ -67,28 +67,25 @@ def keep_rows(m, mask):
     return out
 
 
-def main():
-    p = argparse.ArgumentParser(description="Risk control on test + NDCG/Recall ablation")
-    p.add_argument("--emb", default="models/embeddings.npz")
-    p.add_argument("--data-dir", default="data/processed")
-    p.add_argument("--risk", default="configs/risk_threshold.json")
-    p.add_argument("--out", default="reports/risk_rows.json")
-    a = p.parse_args()
-
-    with open(a.risk) as f:
+def risk_rows(emb="models/embeddings.npz", data_dir="data/processed",
+              risk_path="configs/risk_threshold.json", d=None):
+    """Rows of the benchmark table with and without risk control (also used by run_benchmark.py).
+    d: output of load_splits, to avoid loading the splits twice."""
+    with open(risk_path) as f:
         cfg = json.load(f)
     t_rc, k, umax = cfg["threshold"], cfg["k"], cfg["unwanted_max"]
     foldin = cfg.get("mode") == "foldin_blend"
     tag = "NLGCL fold-in (app score)" if foldin else "NLGCL"
 
     # 1) unwanted-meal rate on test (same scoring as the calibration)
-    rec = Recommender(a.emb)
-    vecs = foldin_vectors(rec, [f"{a.data_dir}/train.csv", f"{a.data_dir}/val.csv"]) if foldin else None
-    S, W, n = build_calibration(f"{a.data_dir}/test.csv", rec, k, umax, vecs)
+    rec = Recommender(emb)
+    vecs = foldin_vectors(rec, [f"{data_dir}/train.csv", f"{data_dir}/val.csv"]) if foldin else None
+    S, W, n = build_calibration(f"{data_dir}/test.csv", rec, k, umax, vecs)
 
     # 2) NDCG@10 / Recall@20, same masks as run_benchmark.py
-    d = load_splits(a.data_dir)
-    U, V, P, known_u, known_i = aligned_embeddings(a.emb, d["user_ids"], d["item_ids"])
+    if d is None:
+        d = load_splits(data_dir)
+    U, V, P, known_u, known_i = aligned_embeddings(emb, d["user_ids"], d["item_ids"])
     if foldin:   # val: liked meals of train; test: liked meals of train + val
         U_val, ok_val = foldin_matrix(d["train_pos"], V, known_i)
         U_test, ok_test = foldin_matrix(d["train_pos"] + d["val_pos"], V, known_i)
@@ -112,6 +109,18 @@ def main():
                      "test_recall": [tr], "unwanted_rate": [float(risk)]})
     print(f"test risk n={n} users | meals replaced (calibration protocol): {(S < t_rc).mean():.1%}")
 
+    return rows
+
+
+def main():
+    p = argparse.ArgumentParser(description="Risk control on test + NDCG/Recall ablation")
+    p.add_argument("--emb", default="models/embeddings.npz")
+    p.add_argument("--data-dir", default="data/processed")
+    p.add_argument("--risk", default="configs/risk_threshold.json")
+    p.add_argument("--out", default="reports/risk_rows.json")
+    a = p.parse_args()
+
+    rows = risk_rows(a.emb, a.data_dir, a.risk)
     with open(a.out, "w") as f:
         json.dump(rows, f, indent=2)
     print(f"-> {a.out}")
