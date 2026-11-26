@@ -122,6 +122,14 @@ def liked_meal_ids(user_id: int) -> list[int]:
         ).fetchall()
     return [r["meal_id"] for r in rows]
 
+def disliked_meal_ids(user_id: int) -> set[int]:
+    """Meals whose latest rating by the student is 1 or 2 stars: never put them back in the box."""
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT meal_id, rating, MAX(rowid) FROM app_ratings WHERE user_id = ? GROUP BY meal_id",
+            (user_id,),
+        ).fetchall()
+    return {r["meal_id"] for r in rows if r["rating"] <= 2}
 
 def predict(user_id: int, budget_min: float, budget_max: float,
             allergies: list[str], diet: str, k: int = 10) -> tuple[list[dict], str]:
@@ -133,6 +141,8 @@ def predict(user_id: int, budget_min: float, budget_max: float,
     model could not be loaded (plan B).
     """
     candidates = hard_filters(allergies, diet)
+    disliked = disliked_meal_ids(user_id)
+    candidates = [m for m in candidates if m["id"] not in disliked] or candidates  # never an empty box
     if MODEL is None:
         random.shuffle(candidates)
         return [{**m, "score": round(random.random(), 3)} for m in candidates[:k]], "random (model not loaded)"
