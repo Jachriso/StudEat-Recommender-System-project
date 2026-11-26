@@ -126,6 +126,9 @@ full-catalogue ranking, meals already rated in training masked, positives = rati
   (`configs/risk_threshold.json`, α = 0.015). On test, unwanted meals drop from 2.18 % to 1.95 % with no loss
   of accuracy. The test rate stays above α because the base risk is higher on the test period (2.18 % vs
   1.80 % on validation): the guarantee assumes data like the calibration set, and our split is temporal.
+  NDCG@10 and Recall@20 are the same with and without risk control: on the full-catalogue ranking, the
+  top 10 always scores above the threshold (t = 0.20), so no slot is replaced. The unwanted rate is
+  measured like the calibration, on the meals each test student actually rated (12.7 % of them replaced).
 - **Latency** of `/recommend` is measured by `scripts/measure_latency.py` (see `reports/latency.md`).
 
 ---
@@ -150,9 +153,21 @@ python src/plot_history.py models/nlgcl_history.csv
 # Baselines (Random, Most-Popular) with the shared evaluation harness
 python src/run_baselines.py
 
-# Final benchmark: every model over 3 seeds + baselines, with the shared harness
-# (writes reports/results_final.md; about 30 to 60 min on CPU, with early stopping)
+# Risk control : conformal calibration of the replacement threshold on validation
+# (fold-in vectors + app score, alpha = 0.015), writes configs/risk_threshold.json (versioned)
+python src/risk_control.py --foldin
+
+# Final benchmark: every model over 3 seeds + baselines + the app model with and without
+# risk control, all with the shared harness (writes reports/results_final.md;
+# about 30 to 60 min on CPU, with early stopping). Checkpoints are not versioned,
+# so the first run must train.
 python src/run_benchmark.py
+# Re-evaluate the checkpoints already in models/benchmark/ without retraining
+python src/run_benchmark.py --skip-train
+
+# Risk-control rows only, without the other models (writes reports/risk_rows.json)
+python src/risk_eval.py
+
 # Optional training options (off by default; they did not help in our tuning)
 #   --mask-dup     mask duplicate ids as false negatives in the InfoNCE loss
 #   --neg-alpha A  sample negatives proportionally to popularity^A (0 = uniform)
@@ -166,13 +181,6 @@ python src/eval_cosine.py --ckpt models/benchmark/nlgcl_s0.pt models/benchmark/n
 
 # Results by user-activity level
 python src/eval_by_activity.py --ckpt models/nlgcl.pt
-
-# Risk control : conformal calibration of the replacement threshold on validation
-# (fold-in vectors + app score, alpha = 0.015), writes configs/risk_threshold.json
-python src/risk_control.py --foldin
-
-# Risk control on test + NDCG@10 / Recall@20 with and without it, writes reports/risk_rows.json
-python src/risk_eval.py
 
 # Export the embeddings used by the API (replaces models/embeddings.npz)
 python src/export_embeddings.py --ckpt models/nlgcl.pt
@@ -210,7 +218,7 @@ reports/
   posters/              The 3 StudEat posters (PNG + A3 PDF)
   latency.md            Latency of /recommend (scripts/measure_latency.py)
   results_final.md      Final benchmark table (+ results_final.json)
-  risk_rows.json        Risk-control rows of the benchmark (src/risk_eval.py)
+  risk_rows.json        Risk-control rows alone (src/risk_eval.py)
 scripts/
   measure_latency.py    Latency test of the API over HTTP
 src/
@@ -228,9 +236,9 @@ src/
   recommender.py        Recommender used by the API (popularity fallback for new students)
   risk_control.py       Conformal calibration of the risk threshold
   risk_data_check.py    Share of unwanted ratings (<= 2) per split
-  risk_eval.py          Risk control on test + ablation rows for the benchmark
+  risk_eval.py          Risk control on test: rows with and without it (used by run_benchmark.py)
   run_baselines.py      Random and Most-Popular baselines with the shared harness
-  run_benchmark.py      Final benchmark: all models over 3 seeds, one results table
+  run_benchmark.py      Final benchmark: all models over 3 seeds + risk-control rows, one results table
   scoring.py            App score (0.7 x cosine + 0.3 x popularity), shared with the calibration
   seed_test_data.py     Synthetic test students and ratings
   test_forward.py       Quick model check on synthetic data

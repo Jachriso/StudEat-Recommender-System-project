@@ -6,6 +6,8 @@ For each model and each seed, this script:
   2. reloads the best checkpoint (selected on validation by train.py),
   3. evaluates it with src/evaluation.py, exactly like the baselines.
 Random and Most-Popular are evaluated with the same harness, on the same split.
+The model used by the app (fold-in vectors from models/embeddings.npz + app score) is added with
+and without risk control (threshold in configs/risk_threshold.json, see src/risk_eval.py).
 The result is ONE table (mean ± std over the seeds), written to reports/results_final.md.
 
 Usage (from the project root):
@@ -13,12 +15,10 @@ Usage (from the project root):
   python src/run_benchmark.py --epochs 2               # quick check of the whole chain
   python src/run_benchmark.py --skip-train             # re-evaluate existing checkpoints only
   python src/run_benchmark.py --models nlgcl=configs/nlgcl.json nlgcl_neg=configs/nlgcl_neg.json
-  python src/run_benchmark.py --skip-train --extra-rows reports/risk_rows.json
+  python src/run_benchmark.py --no-risk                # without the two risk-control rows
 
---extra-rows adds rows computed by other scripts (e.g. the risk-control ablation), as a JSON list:
-  [{"model": "NLGCL fold-in (app score) (no risk control)", "val_ndcg": [..], "test_ndcg": [..],
-    "test_recall": [..], "unwanted_rate": [..]},
-   {"model": "NLGCL fold-in (app score) + risk control (alpha = 0.015)", ...}]
+--extra-rows (optional) adds rows computed elsewhere, as a JSON list:
+  [{"model": "My model", "val_ndcg": [..], "test_ndcg": [..], "test_recall": [..], "unwanted_rate": [..]}]
 "model" is required. "val_ndcg", "test_ndcg", "test_recall" and "unwanted_rate" hold one value
 per seed; a missing metric is shown as "n/a" in the table.
 """
@@ -35,6 +35,7 @@ import torch
 from evaluation import (embedding_scores, evaluate_scores, load_splits,
                         most_popular, random_scores)
 from model_nlgcl import NLGCL, build_norm_adj
+from risk_eval import risk_rows
 
 DEFAULT_MODELS = {"LightGCN": "configs/lightgcn.json", "NLGCL": "configs/nlgcl.json"}
 SRC_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -109,8 +110,11 @@ def main():
     p.add_argument("--random-seeds", type=int, default=5, help="seeds for the Random baseline")
     p.add_argument("--out-dir", default="models/benchmark", help="checkpoints (not versioned)")
     p.add_argument("--skip-train", action="store_true", help="reuse existing checkpoints")
+    p.add_argument("--emb", default="models/embeddings.npz", help="embeddings used by the app")
+    p.add_argument("--risk", default="configs/risk_threshold.json", help="calibrated risk threshold")
+    p.add_argument("--no-risk", action="store_true", help="skip the two risk-control rows")
     p.add_argument("--extra-rows", nargs="*", default=[],
-                   help="JSON files with rows computed elsewhere (e.g. risk control)")
+                   help="JSON files with rows computed elsewhere (optional)")
     p.add_argument("--report", default="reports/results_final.md")
     a = p.parse_args()
 
@@ -154,6 +158,15 @@ def main():
         add_row(f"{name} ({len(a.seeds)} seeds)",
                 [embedding_scores(*load_embeddings(c, d)) for c in ckpts[name]])
 
+    # App model with and without risk control (same harness masks, see src/risk_eval.py)
+    if not a.no_risk:
+        for f_ in (a.emb, a.risk):
+            if not os.path.exists(f_):
+                sys.exit(f"Missing {f_} (run src/risk_control.py --foldin, or use --no-risk)")
+        for r in risk_rows(a.emb, a.data_dir, a.risk, d=d):
+            rows.append(r)
+            print(f"{r['model']:<28} test NDCG@10 {fmt(r['test_ndcg'])}  unwanted {fmt(r['unwanted_rate'])}")
+
     for path in a.extra_rows:
         with open(path, encoding="utf-8") as f:
             for r in json.load(f):
@@ -178,6 +191,10 @@ def main():
         lines.append(line)
     table = "\n".join(lines)
 
+    # Reproduce block: checkpoints are not versioned, so the command trains (no --skip-train).
+    epochs = f" --epochs {a.epochs}" if a.epochs else ""
+    reproduce = f"python src/run_benchmark.py{epochs} --seeds {' '.join(map(str, a.seeds))}"
+
     stats = d["stats"]
     report = f"""# StudEat – final results
 
@@ -198,8 +215,12 @@ interactions from {rows[0]['test_users']:,} users.
 **Reproduce.**
 
 ```bash
-python src/run_benchmark.py{' --epochs ' + str(a.epochs) if a.epochs else ''} --seeds {' '.join(map(str, a.seeds))}{' --skip-train --extra-rows ' + ' '.join(a.extra_rows) if a.extra_rows else ''}
+{reproduce}
 ```
+
+Checkpoints are not versioned: this trains every model, then evaluates it. Add `--skip-train` to
+re-evaluate the checkpoints already in `{a.out_dir}`. The risk-control rows use the versioned
+`{a.emb}` and `{a.risk}` (recalibrate with `python src/risk_control.py --foldin`).
 """
     os.makedirs(os.path.dirname(a.report) or ".", exist_ok=True)
     with open(a.report, "w", encoding="utf-8") as f:

@@ -24,5 +24,9 @@ interactions from 1,434 users.
 **Reproduce.**
 
 ```bash
-python src/run_benchmark.py --seeds 0 1 2 --skip-train --extra-rows reports/risk_rows.json
+python src/run_benchmark.py --seeds 0 1 2
 ```
+
+Checkpoints are not versioned: this trains every model, then evaluates it. Add `--skip-train` to
+re-evaluate the checkpoints already in `models/benchmark`. The risk-control rows use the versioned
+`models/embeddings.npz` and `configs/risk_threshold.json` (recalibrate with `python src/risk_control.py --foldin`).
