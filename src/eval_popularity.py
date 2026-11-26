@@ -1,6 +1,6 @@
-"""StudEat - baseline popularite (memes metriques et memes masques que train.py).
+"""StudEat - popularity baseline (same metrics and same masks as train.py).
 
-Usage : python src/eval_popularity.py
+Usage: python src/eval_popularity.py
 """
 import argparse
 
@@ -12,7 +12,7 @@ from train import evaluate, map_split, read_split, to_csr
 
 
 class PopularityModel:
-    """Meme interface que NLGCL pour reutiliser evaluate() : score = popularite de l'item."""
+    """Same interface as NLGCL to reuse evaluate(): score = item popularity."""
 
     def __init__(self, pop):
         self.U = torch.ones(1, 1)
@@ -53,9 +53,9 @@ def main():
     model._n_users = n_users
     dev = torch.device("cpu")
     n, r, k = evaluate(model, val_csr, [train_csr], dev)
-    print(f"VAL  popularite NDCG@10={n:.4f}  Recall@20={r:.4f}  ({k} users)")
+    print(f"VAL  popularity NDCG@10={n:.4f}  Recall@20={r:.4f}  ({k} users)")
     n, r, k = evaluate(model, test_csr, [train_csr, val_csr], dev)
-    print(f"TEST popularite NDCG@10={n:.4f}  Recall@20={r:.4f}  ({k} users)")
+    print(f"TEST popularity NDCG@10={n:.4f}  Recall@20={r:.4f}  ({k} users)")
 
 
 if __name__ == "__main__":
