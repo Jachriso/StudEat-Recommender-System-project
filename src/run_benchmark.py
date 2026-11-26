@@ -13,12 +13,12 @@ Usage (from the project root):
   python src/run_benchmark.py --epochs 2               # quick check of the whole chain
   python src/run_benchmark.py --skip-train             # re-evaluate existing checkpoints only
   python src/run_benchmark.py --models nlgcl=configs/nlgcl.json nlgcl_neg=configs/nlgcl_neg.json
-  python src/run_benchmark.py --extra-rows reports/risk_control_rows.json
+  python src/run_benchmark.py --skip-train --extra-rows reports/risk_rows.json
 
 --extra-rows adds rows computed by other scripts (e.g. the risk-control ablation), as a JSON list:
-  [{"model": "NLGCL (no risk control)", "val_ndcg": [..], "test_ndcg": [..],
+  [{"model": "NLGCL fold-in (app score) (no risk control)", "val_ndcg": [..], "test_ndcg": [..],
     "test_recall": [..], "unwanted_rate": [..]},
-   {"model": "NLGCL + risk control (alpha = 0.01)", ...}]
+   {"model": "NLGCL fold-in (app score) + risk control (alpha = 0.015)", ...}]
 "model" is required. "val_ndcg", "test_ndcg", "test_recall" and "unwanted_rate" hold one value
 per seed; a missing metric is shown as "n/a" in the table.
 """
@@ -198,7 +198,7 @@ interactions from {rows[0]['test_users']:,} users.
 **Reproduce.**
 
 ```bash
-python src/run_benchmark.py{' --epochs ' + str(a.epochs) if a.epochs else ''} --seeds {' '.join(map(str, a.seeds))}
+python src/run_benchmark.py{' --epochs ' + str(a.epochs) if a.epochs else ''} --seeds {' '.join(map(str, a.seeds))}{' --skip-train --extra-rows ' + ' '.join(a.extra_rows) if a.extra_rows else ''}
 ```
 """
     os.makedirs(os.path.dirname(a.report) or ".", exist_ok=True)
